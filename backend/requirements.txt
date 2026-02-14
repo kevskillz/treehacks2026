@@ -1,8 +1,0 @@
-# Backend: Twilio SMS + Claude (feedback + code/PR)
-flask>=3.0.0
-flask-cors>=4.0.0
-supabase>=2.9.0
-twilio>=9.0.0
-anthropic>=0.39.0
-python-dotenv>=1.0.0
-pydantic>=2.9.0
