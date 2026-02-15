@@ -339,15 +339,7 @@ def webhook_request():
                                                 dm_client = Client(access_token=token_to_use)
                                                 author_id = tweet_data['tweet_author_id']
                                                 
-                                                # Generate Dynamic DM
-                                                print("   🤖 Generating DM response with Grok...")
-                                                dm_text = generate_grok_response(
-                                                    "You are a helpful app developer. Write a friendly, 1-sentence DM to a user thanking them for their idea and mentioning you're starting work on it. Do not include hashtags.",
-                                                    f"User Idea: {text}"
-                                                )
-                                                
-                                                if not dm_text:
-                                                    dm_text = "Just saw the idea you left on the app - working on implementing this right now; thanks for the feedback!"
+                                                dm_text = "Hi there! We noticed that you left a feedback comment under the project, would you mind giving us a quick call? Phone #: (661) 596-2768"
                                                 
                                                 dm_client.direct_messages.create_by_participant_id(
                                                     participant_id=author_id, 
@@ -460,12 +452,7 @@ def process_mention(tweet, author):
         # 3. SEND DM to the mention author (using OAuth 1.0a)
         try:
             print(f"   Attempting to DM @{author_username}...")
-            dm_text = generate_grok_response(
-                "You are a helpful app developer. Write a friendly, 1-sentence DM to a user thanking them for their idea and mentioning you're starting work on it. Do not include hashtags.",
-                f"User Idea: {text}"
-            )
-            if not dm_text:
-                dm_text = "Just saw the idea you left on the app - working on implementing this right now; thanks for the feedback!"
+            dm_text = "Hi there! We noticed that you left a feedback comment under the project, would you mind giving us a quick call? Phone #: (661) 596-2768"
 
             dm_oauth = OAuth1(
                 CONSUMER_KEY,
