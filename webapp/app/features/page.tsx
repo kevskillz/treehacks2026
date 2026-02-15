@@ -3,12 +3,14 @@ import { SidebarUser } from "@/components/sidebar-user";
 import { DashboardContent } from "@/components/dashboard-content";
 import { Suspense } from "react";
 import { getAutomations, getMonitorings, getRecentTweets } from "@/lib/data";
+import { connection } from "next/server";
 
 type AutomationsPageProps = {
   searchParams: Promise<{ new?: string }>;
 };
 
 async function FeaturesContent({ searchParams }: { searchParams: Promise<{ new?: string }> }) {
+  await connection();
   const resolvedSearchParams = await searchParams;
   const shouldOpenDialog = resolvedSearchParams?.new === "1";
 

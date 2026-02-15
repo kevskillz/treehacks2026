@@ -198,11 +198,12 @@ export function ProjectDetail({
             planId={planId}
             issueUrl={issueUrl}
             issueNumber={issueNumber}
+            projectStatus={projectStatus}
           />
         </div>
 
-        {projectStatus === "provisioning" && planId && (
-          <PlanReview planId={planId} initialContent={planContent} />
+        {planId && ["provisioning", "executing", "completed"].includes(projectStatus) && (
+          <PlanReview planId={planId} initialContent={planContent} projectStatus={projectStatus} />
         )}
 
         {relatedTweets && relatedTweets.length > 0 && (

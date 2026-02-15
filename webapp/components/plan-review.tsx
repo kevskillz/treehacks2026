@@ -8,13 +8,15 @@ import { approvePlan } from "@/app/actions";
 type PlanReviewProps = {
   planId: string;
   initialContent?: string;
+  projectStatus?: string;
 };
 
-export function PlanReview({ planId, initialContent }: PlanReviewProps) {
+export function PlanReview({ planId, initialContent, projectStatus }: PlanReviewProps) {
+  const isAlreadyApproved = projectStatus === "completed" || projectStatus === "executing";
   const [content, setContent] = useState(initialContent || "");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const [approved, setApproved] = useState(false);
+  const [approved, setApproved] = useState(isAlreadyApproved);
   const [activeTab, setActiveTab] = useState<"edit" | "preview">("edit");
 
   const onApprove = async () => {

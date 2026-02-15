@@ -11,10 +11,14 @@ interface CreateButtonProps {
   planId?: string;
   issueUrl?: string;
   issueNumber?: number;
+  projectStatus?: string;
 }
 
-export function CreateButton({ automationId, hasIssue, planId, issueUrl, issueNumber }: CreateButtonProps) {
+export function CreateButton({ automationId, hasIssue, planId, issueUrl, issueNumber, projectStatus }: CreateButtonProps) {
   const initialStage = (() => {
+    // Derive stage from database project status first
+    if (projectStatus === "completed" || projectStatus === "executing") return "pr" as const;
+    if (projectStatus === "provisioning" || projectStatus === "planning") return "plan" as const;
     if (planId) return "plan" as const;
     if (hasIssue) return "issue" as const;
     return "idle" as const;
@@ -25,6 +29,30 @@ export function CreateButton({ automationId, hasIssue, planId, issueUrl, issueNu
   const [message, setMessage] = useState<string | null>(null);
   const [issueLink, setIssueLink] = useState<string | undefined>(issueUrl);
   const [issueNum, setIssueNum] = useState<number | undefined>(issueNumber);
+
+  const steps = useMemo(
+    () => [
+      {
+        key: "issue" as const,
+        title: "Issue created",
+        description: "Track the request",
+        icon: <FilePlus2 className="h-4 w-4" />,
+      },
+      {
+        key: "plan" as const,
+        title: "Plan ready",
+        description: "Implementation outline",
+        icon: <Sparkles className="h-4 w-4" />,
+      },
+      {
+        key: "pr" as const,
+        title: "PR opened",
+        description: "Review & merge",
+        icon: <GitPullRequest className="h-4 w-4" />,
+      },
+    ],
+    []
+  );
 
   const handleCreate = async () => {
     setIsLoading(true);
@@ -48,30 +76,6 @@ export function CreateButton({ automationId, hasIssue, planId, issueUrl, issueNu
   };
 
   const renderPipeline = () => {
-    const steps = useMemo(
-      () => [
-        {
-          key: "issue" as const,
-          title: "Issue created",
-          description: "Track the request",
-          icon: <FilePlus2 className="h-4 w-4" />,
-        },
-        {
-          key: "plan" as const,
-          title: "Plan ready",
-          description: "Implementation outline",
-          icon: <Sparkles className="h-4 w-4" />,
-        },
-        {
-          key: "pr" as const,
-          title: "PR opened",
-          description: "Review & merge",
-          icon: <GitPullRequest className="h-4 w-4" />,
-        },
-      ],
-      []
-    );
-
     const currentIndex = Math.max(
       steps.findIndex((step) => step.key === stage),
       0
