@@ -35,6 +35,8 @@ interface ProjectDetailProps {
   hasIssue?: boolean;
   issueUrl?: string;
   issueNumber?: number;
+  prUrl?: string;
+  prNumber?: number;
 }
 
 const STATUS_OPTIONS = [
@@ -157,6 +159,8 @@ export function ProjectDetail({
   hasIssue,
   issueUrl,
   issueNumber,
+  prUrl,
+  prNumber,
 }: ProjectDetailProps) {
   return (
     <div className="min-h-screen p-8 lg:p-16">
@@ -199,6 +203,8 @@ export function ProjectDetail({
             issueUrl={issueUrl}
             issueNumber={issueNumber}
             projectStatus={projectStatus}
+            prUrl={prUrl}
+            prNumber={prNumber}
           />
         </div>
 

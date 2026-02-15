@@ -12,9 +12,11 @@ interface CreateButtonProps {
   issueUrl?: string;
   issueNumber?: number;
   projectStatus?: string;
+  prUrl?: string;
+  prNumber?: number;
 }
 
-export function CreateButton({ automationId, hasIssue, planId, issueUrl, issueNumber, projectStatus }: CreateButtonProps) {
+export function CreateButton({ automationId, hasIssue, planId, issueUrl, issueNumber, projectStatus, prUrl, prNumber }: CreateButtonProps) {
   const initialStage = (() => {
     // Derive stage from database project status first
     if (projectStatus === "completed" || projectStatus === "executing") return "pr" as const;
@@ -89,16 +91,28 @@ export function CreateButton({ automationId, hasIssue, planId, issueUrl, issueNu
               <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Build pipeline</p>
               <p className="text-sm text-muted-foreground/90">We keep going until the PR is ready.</p>
             </div>
-            {issueLink && (
-              <a
-                href={issueLink}
-                target="_blank"
-                rel="noreferrer"
-                className="text-xs font-medium text-foreground underline underline-offset-4 hover:text-foreground/70"
-              >
-                {issueNum ? `Issue #${issueNum}` : "View issue"}
-              </a>
-            )}
+            <div className="flex items-center gap-3">
+              {issueLink && (
+                <a
+                  href={issueLink}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-xs font-medium text-foreground underline underline-offset-4 hover:text-foreground/70"
+                >
+                  {issueNum ? `Issue #${issueNum}` : "View issue"}
+                </a>
+              )}
+              {prUrl && (
+                <a
+                  href={prUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-xs font-medium text-foreground underline underline-offset-4 hover:text-foreground/70"
+                >
+                  {prNumber ? `PR #${prNumber}` : "View PR"}
+                </a>
+              )}
+            </div>
           </div>
 
           <div className="grid gap-3 sm:grid-cols-3">

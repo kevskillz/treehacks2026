@@ -71,6 +71,8 @@ async function ProjectContent({ params }: { params: Promise<{ id: string }> }) {
         hasIssue={hasIssue}
         issueUrl={issueUrl || project?.github_issue_url}
         issueNumber={issueNumber || project?.github_issue_number}
+        prUrl={project?.github_pr_url}
+        prNumber={project?.github_pr_number}
       />
     </SidebarLayout>
   );
