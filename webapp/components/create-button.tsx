@@ -26,6 +26,30 @@ export function CreateButton({ automationId, hasIssue, planId, issueUrl, issueNu
   const [issueLink, setIssueLink] = useState<string | undefined>(issueUrl);
   const [issueNum, setIssueNum] = useState<number | undefined>(issueNumber);
 
+  const steps = useMemo(
+    () => [
+      {
+        key: "issue" as const,
+        title: "Issue created",
+        description: "Track the request",
+        icon: <FilePlus2 className="h-4 w-4" />,
+      },
+      {
+        key: "plan" as const,
+        title: "Plan ready",
+        description: "Implementation outline",
+        icon: <Sparkles className="h-4 w-4" />,
+      },
+      {
+        key: "pr" as const,
+        title: "PR opened",
+        description: "Review & merge",
+        icon: <GitPullRequest className="h-4 w-4" />,
+      },
+    ],
+    []
+  );
+
   const handleCreate = async () => {
     setIsLoading(true);
     setMessage(null);
@@ -48,30 +72,6 @@ export function CreateButton({ automationId, hasIssue, planId, issueUrl, issueNu
   };
 
   const renderPipeline = () => {
-    const steps = useMemo(
-      () => [
-        {
-          key: "issue" as const,
-          title: "Issue created",
-          description: "Track the request",
-          icon: <FilePlus2 className="h-4 w-4" />,
-        },
-        {
-          key: "plan" as const,
-          title: "Plan ready",
-          description: "Implementation outline",
-          icon: <Sparkles className="h-4 w-4" />,
-        },
-        {
-          key: "pr" as const,
-          title: "PR opened",
-          description: "Review & merge",
-          icon: <GitPullRequest className="h-4 w-4" />,
-        },
-      ],
-      []
-    );
-
     const currentIndex = Math.max(
       steps.findIndex((step) => step.key === stage),
       0

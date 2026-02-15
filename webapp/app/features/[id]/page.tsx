@@ -10,8 +10,7 @@ type ProjectPageProps = {
   params: Promise<{ id: string }>;
 };
 
-export default async function ProjectPage({ params }: ProjectPageProps) {
-  const { id } = await params;
+async function ProjectContent({ id }: { id: string }) {
   const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
   const [monitorings, automations, details] = await Promise.all([
     getMonitorings(),
@@ -71,5 +70,15 @@ export default async function ProjectPage({ params }: ProjectPageProps) {
         issueNumber={issueNumber || project?.github_issue_number}
       />
     </SidebarLayout>
+  );
+}
+
+export default async function ProjectPage({ params }: ProjectPageProps) {
+  const { id } = await params;
+
+  return (
+    <Suspense fallback={<div className="min-h-screen p-8 lg:p-16">Loading...</div>}>
+      <ProjectContent id={id} />
+    </Suspense>
   );
 }
