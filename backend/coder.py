@@ -318,7 +318,15 @@ class CoderOrchestrator:
             # Step 4: Detect or reuse repo context
             if cached_repo_context:
                 self._log_step(project_id, "reuse_context", "Using cached repo context (skipping detection)")
-                repo_context = cached_repo_context
+                if isinstance(cached_repo_context, dict):
+                    repo_context = RepoContext(
+                        primary_language=cached_repo_context.get("primary_language", "unknown"),
+                        test_framework=cached_repo_context.get("test_framework"),
+                        build_system=cached_repo_context.get("build_system"),
+                        structure_summary=cached_repo_context.get("structure_summary", ""),
+                    )
+                else:
+                    repo_context = cached_repo_context
             else:
                 self._log_step(project_id, "detect_context", "Detecting repository context")
                 repo_context = detect_repo_context(sandbox_ctx)
@@ -363,7 +371,7 @@ class CoderOrchestrator:
             # Step 8: Send implementation prompt
             self._log_step(project_id, "implement_feature", "Implementing feature with Codex CLI")
             implementation_prompt = self._build_implementation_prompt(
-                issue_data, plan, test_cases
+                issue_data, plan, test_cases, repo_context=repo_context
             )
             output = codex_session.run_prompt(implementation_prompt)
             logger.info(f"Implementation output: {len(output)} chars")
@@ -516,34 +524,43 @@ class CoderOrchestrator:
         logger.info(f"[{step_name}] {message}")
 
     def _build_implementation_prompt(
-        self, issue: IssueData, plan, test_cases: str
+        self, issue: IssueData, plan, test_cases: str, repo_context=None
     ) -> str:
         """Build comprehensive prompt for Codex CLI."""
-        return f"""I need you to implement a fix for the following GitHub issue:
+        context = ""
+        if repo_context:
+            ctx = repo_context if isinstance(repo_context, dict) else {
+                "primary_language": repo_context.primary_language,
+                "test_framework": repo_context.test_framework,
+                "build_system": repo_context.build_system,
+            }
+            context = (
+                f"# Repository Context\n"
+                f"- Language: {ctx.get('primary_language', 'unknown')}\n"
+                f"- Test Framework: {ctx.get('test_framework', 'none')}\n"
+                f"- Build System: {ctx.get('build_system', 'unknown')}\n\n"
+            )
 
-# Issue Details
-**Title:** {issue.title}
-**Number:** #{issue.number}
-**Description:**
+        test_section = ""
+        if test_cases and test_cases.strip() and "skipping" not in test_cases.lower():
+            test_section = f"# Test Cases\n{test_cases}\n\n"
+
+        return f"""Implement the following GitHub issue. Follow the plan EXACTLY.
+
+# Issue
+**{issue.title}** (#{issue.number})
+
 {issue.body}
 
-# Implementation Plan
-{plan.content if plan else "Follow the issue requirements"}
+{context}# Implementation Plan (FOLLOW THIS EXACTLY)
+{plan.content if plan else "Follow the issue requirements directly."}
 
-# Test Cases (Implement These FIRST!)
-{test_cases}
-
-# Instructions
-1. Implement the feature according to the plan
-2. If tests exist, ensure they pass
-3. Follow the project's coding conventions
-4. Consider edge cases and error handling
-
-# IMPORTANT CONSTRAINTS
-- Do NOT run dev servers interactively (npm run dev, yarn dev, next dev, etc.)
-- Do NOT wait for or expect interactive user input
-- You can run: npm install, npm run build, npm test, tsc --noEmit, eslint
-- If no test framework exists, skip test implementation — do NOT add one
-
-Implement the feature now. Focus on code changes only.
+{test_section}# Rules
+1. Make ONLY the changes described in the plan. Do not refactor unrelated code.
+2. Do NOT add new dependencies unless the plan explicitly says to.
+3. Do NOT modify lock files (yarn.lock, package-lock.json) manually.
+4. Do NOT start dev servers (npm run dev, next dev, yarn dev, etc).
+5. After all changes, run the build command to verify. Fix any build errors.
+6. Follow existing code style and patterns.
+7. Keep changes minimal and focused.
 """

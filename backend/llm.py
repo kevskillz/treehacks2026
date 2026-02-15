@@ -20,7 +20,7 @@ load_dotenv(dotenv_path=env_path)
 logger = logging.getLogger(__name__)
 
 # OpenAI models
-PLANNING_MODEL = "gpt-5.1-codex-mini"
+PLANNING_MODEL = "gpt-5-mini"
 UTILITY_MODEL = "gpt-4.1-nano"
 
 

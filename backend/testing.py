@@ -91,7 +91,7 @@ class VerificationError(Exception):
 
 def detect_repo_context(sandbox_ctx: SandboxContext) -> RepoContext:
     """
-    Detect repository context inside the Modal sandbox using Claude.
+    Detect repository context inside the sandbox using file-based heuristics.
     """
     from modal_sandbox import get_repo_structure
 
@@ -108,19 +108,10 @@ def detect_repo_context(sandbox_ctx: SandboxContext) -> RepoContext:
         except SandboxError:
             continue
 
-    # Use Claude to analyze the repository
-    try:
-        context_data = claude_client.detect_tech_stack(
-            structure_summary, readme_content
-        )
-        primary_language = context_data.get("primary_language", "unknown")
-        test_framework = context_data.get("test_framework")
-        build_system = context_data.get("build_system")
-    except Exception as e:
-        logger.warning(f"Claude detection failed, using fallback: {e}")
-        primary_language, test_framework, build_system = _fallback_detection(
-            sandbox_ctx
-        )
+    # Use file-based heuristics (fast, no LLM call needed)
+    primary_language, test_framework, build_system = _fallback_detection(
+        sandbox_ctx
+    )
 
     return RepoContext(
         primary_language=primary_language,

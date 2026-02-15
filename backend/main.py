@@ -712,9 +712,20 @@ def process_new_tweet(tweet_id: str):
 
 
 def generate_implementation_plan(
-    project_id: str, repo_context: dict | None = None
+    project_id: str,
+    repo_context: dict | None = None,
+    sandbox_ctx=None,
+    keep_sandbox: bool = False,
 ):
-    """Generate implementation plan for a project using Claude."""
+    """Generate implementation plan for a project using Claude.
+
+    Args:
+        project_id: Project UUID string.
+        repo_context: Pre-computed repo context dict (skips detection).
+        sandbox_ctx: Existing sandbox to reuse (skips creating a new one).
+        keep_sandbox: If True, don't clean up sandbox on exit and return
+            ``(plan, sandbox_ctx, repo_context)`` instead of just ``plan``.
+    """
     logger.info(f"Generating plan for project {project_id}")
 
     data = db.get_project_with_tweets(supabase, project_id)
@@ -728,7 +739,7 @@ def generate_implementation_plan(
     if not repo:
         raise ValueError(f"Repo config not found for project {project_id}")
 
-    sandbox_ctx = None
+    owns_sandbox = sandbox_ctx is None  # True if we created it ourselves
     try:
         # Always include project title/description, plus tweets if available
         feedback_text = f"**{project.title}**\n\n{project.description or ''}"
@@ -740,13 +751,14 @@ def generate_implementation_plan(
         if repo_context:
             logger.info("Using pre-computed repo context")
         else:
-            if SANDBOX_MODE == "local":
-                from local_sandbox import create_sandbox as create_sb, cleanup_sandbox as cleanup_sb
-            else:
-                from modal_sandbox import create_sandbox as create_sb, cleanup_sandbox as cleanup_sb
+            if sandbox_ctx is None:
+                if SANDBOX_MODE == "local":
+                    from local_sandbox import create_sandbox as create_sb
+                else:
+                    from modal_sandbox import create_sandbox as create_sb
 
-            logger.info("Creating temporary sandbox for plan generation")
-            sandbox_ctx = create_sb(UUID(project_id), repo)
+                logger.info("Creating temporary sandbox for plan generation")
+                sandbox_ctx = create_sb(UUID(project_id), repo)
 
             repo_context_obj = detect_repo_context_for_approval(sandbox_ctx)
             repo_context = {
@@ -790,6 +802,9 @@ def generate_implementation_plan(
         )
 
         logger.info(f"Plan {plan.id} generated for project {project_id}")
+
+        if keep_sandbox:
+            return plan, sandbox_ctx, repo_context
         return plan
 
     except Exception as e:
@@ -798,7 +813,8 @@ def generate_implementation_plan(
         raise
 
     finally:
-        if sandbox_ctx:
+        # Only clean up if we created the sandbox AND we're not keeping it
+        if sandbox_ctx and owns_sandbox and not keep_sandbox:
             if SANDBOX_MODE == "local":
                 from local_sandbox import cleanup_sandbox as cleanup_sb
             else:
@@ -834,8 +850,21 @@ def _poll_status_changes(stop_event: threading.Event):
                 _processing.add(pid)
                 logger.info(f"[poller] Detected project {pid} in 'planning' — generating plan")
                 try:
-                    generate_implementation_plan(pid)
-                    logger.info(f"[poller] Plan generated for {pid}, status → provisioning")
+                    # Create sandbox once and keep it for the coder workflow
+                    if SANDBOX_MODE == "local":
+                        from local_sandbox import create_sandbox as create_sb
+                    else:
+                        from modal_sandbox import create_sandbox as create_sb
+
+                    repo = db.get_repo_config(supabase, row["repo_config_id"])
+                    sbx = create_sb(UUID(pid), repo)
+                    result = generate_implementation_plan(
+                        pid, sandbox_ctx=sbx, keep_sandbox=True
+                    )
+                    plan, sbx, ctx = result
+                    _sandbox_cache[pid] = sbx
+                    _context_cache[pid] = ctx
+                    logger.info(f"[poller] Plan generated for {pid}, sandbox cached for reuse")
                 except Exception as e:
                     logger.error(f"[poller] Plan generation failed for {pid}: {e}", exc_info=True)
                     try:
@@ -861,7 +890,15 @@ def _poll_status_changes(stop_event: threading.Event):
                 _processing.add(pid)
                 logger.info(f"[poller] Detected project {pid} in 'executing' — starting coder workflow")
                 try:
-                    coder_orchestrator.execute_issue_workflow(pid, rcid)
+                    cached_sandbox = _sandbox_cache.pop(pid, None)
+                    cached_context = _context_cache.pop(pid, None)
+                    if cached_sandbox:
+                        logger.info(f"[poller] Reusing cached sandbox for {pid}")
+                    coder_orchestrator.execute_issue_workflow(
+                        pid, rcid,
+                        existing_sandbox_ctx=cached_sandbox,
+                        cached_repo_context=cached_context,
+                    )
                     logger.info(f"[poller] Coder workflow completed for {pid}")
                 except Exception as e:
                     logger.error(f"[poller] Coder workflow failed for {pid}: {e}", exc_info=True)
