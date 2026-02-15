@@ -149,7 +149,7 @@ def callback():
         access_token = tokens["access_token"]
 
         if action == 'tweet':
-            tweet_text = "Been working on aggregating stuff for y'all at https://free-stuff-eta.vercel.app/ - so many free resources for builders!"
+            tweet_text = "Just made a website for TreeHacks: https://sample-repo-blush.vercel.app/!"
 
             # Use requests directly with user-context OAuth2 token
             resp = requests.post(
@@ -175,7 +175,7 @@ def callback():
             
         elif action == 'dm':
             participant_id = "1944199676497981440"
-            text_message = "Appreciate the ping about dark mode on FreeSauce! Working on implementing it soon."
+            text_message = "Appreciate the ping about light mode! Working on implementing it soon."
 
             dm_client = Client(access_token=access_token)
             response = dm_client.direct_messages.create_by_participant_id(participant_id, body={"text": text_message})
