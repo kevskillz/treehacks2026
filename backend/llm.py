@@ -74,6 +74,23 @@ class OpenAIClient:
         )
         return response.choices[0].message.content
 
+    def _chat_json(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        model: str = UTILITY_MODEL,
+    ) -> str:
+        """Send a chat message with response_format=json_object to guarantee valid JSON."""
+        response = self.client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            response_format={"type": "json_object"},
+        )
+        return response.choices[0].message.content
+
     def _planning_chat(
         self,
         system_prompt: str,
@@ -107,7 +124,7 @@ class OpenAIClient:
 
     def generate_plan(
         self,
-        tweet_texts: List[str],
+        feedback_text: str,
         repo_owner: str,
         repo_name: str,
         repo_branch: str = "main",
@@ -115,7 +132,6 @@ class OpenAIClient:
     ) -> str:
         """Generate implementation plan from user feedback."""
         try:
-            tweets_summary = "\n".join([f"- {t}" for t in tweet_texts])
 
             context_section = (
                 f"# Repository Context\n\n"
@@ -139,7 +155,7 @@ class OpenAIClient:
             )
 
             user_msg = (
-                f"User Feedback from X (Twitter):\n\n{tweets_summary}\n\n"
+                f"User Feedback:\n\n{feedback_text}\n\n"
                 f"{context_section}\n\n"
                 "Generate a detailed implementation plan (PLAN.md) to address this "
                 "feedback. The plan should include:\n\n"
@@ -227,7 +243,7 @@ class OpenAIClient:
                 "Output valid JSON only."
             )
 
-            result = self._chat(
+            result = self._chat_json(
                 "You are a senior engineer analyzing repositories. "
                 "Output valid JSON only, nothing else.",
                 prompt,
@@ -274,7 +290,7 @@ class OpenAIClient:
                 "Output valid JSON only."
             )
 
-            result = self._chat(
+            result = self._chat_json(
                 "You are a product manager aggregating user feedback into clear, "
                 "actionable GitHub issues. Output valid JSON only.",
                 prompt,
@@ -338,7 +354,7 @@ class OpenAIClient:
                 'Output a JSON object with "title" and "description" keys.'
             )
 
-            result = self._chat(
+            result = self._chat_json(
                 "You are a senior engineer enriching GitHub issues with codebase "
                 "context. Output valid JSON only. No code snippets.",
                 prompt,
