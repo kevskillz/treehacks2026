@@ -348,6 +348,30 @@ def webhook_request():
                                                 print(f"   ✅ DM Sent to @{tweet_data['tweet_author_username']}!")
                                             except Exception as dm_error:
                                                 print(f"   ❌ Failed to send DM: {dm_error}")
+
+                                            # 4. REPLY to the tweet publicly
+                                            try:
+                                                print(f"   Replying to tweet {tweet_data['tweet_id']}...")
+                                                reply_oauth = OAuth1(
+                                                    CONSUMER_KEY,
+                                                    client_secret=CONSUMER_SECRET,
+                                                    resource_owner_key=ACCESS_TOKEN,
+                                                    resource_owner_secret=ACCESS_TOKEN_SECRET,
+                                                )
+                                                reply_resp = requests.post(
+                                                    "https://api.x.com/2/tweets",
+                                                    auth=reply_oauth,
+                                                    json={
+                                                        "text": "Thanks for the feedback, we will look into this!",
+                                                        "reply": {"in_reply_to_tweet_id": tweet_data['tweet_id']}
+                                                    },
+                                                )
+                                                if reply_resp.status_code in (200, 201):
+                                                    print(f"   ✅ Reply posted to tweet {tweet_data['tweet_id']}!")
+                                                else:
+                                                    print(f"   ❌ Reply failed: {reply_resp.status_code} {reply_resp.text}")
+                                            except Exception as reply_error:
+                                                print(f"   ❌ Failed to reply: {reply_error}")
                                         else:
                                             print("   ⚠️ Cannot send DM: No active session or hardcoded token.")
                                     else:
@@ -471,6 +495,30 @@ def process_mention(tweet, author):
                 print(f"   ❌ DM failed: {dm_resp.status_code} {dm_resp.text}")
         except Exception as dm_error:
             print(f"   ❌ Failed to send DM: {dm_error}")
+
+        # 4. REPLY to the tweet publicly
+        try:
+            print(f"   Replying to tweet {tweet_id}...")
+            reply_oauth = OAuth1(
+                CONSUMER_KEY,
+                client_secret=CONSUMER_SECRET,
+                resource_owner_key=ACCESS_TOKEN,
+                resource_owner_secret=ACCESS_TOKEN_SECRET,
+            )
+            reply_resp = requests.post(
+                "https://api.x.com/2/tweets",
+                auth=reply_oauth,
+                json={
+                    "text": "Thanks for the feedback, we will look into this!",
+                    "reply": {"in_reply_to_tweet_id": tweet_id}
+                },
+            )
+            if reply_resp.status_code in (200, 201):
+                print(f"   ✅ Reply posted to tweet {tweet_id}!")
+            else:
+                print(f"   ❌ Reply failed: {reply_resp.status_code} {reply_resp.text}")
+        except Exception as reply_error:
+            print(f"   ❌ Failed to reply: {reply_error}")
 
     except Exception as e:
         print(f"   ❌ Error processing mention: {e}")
