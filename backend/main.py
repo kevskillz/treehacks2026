@@ -56,6 +56,12 @@ coder_orchestrator = CoderOrchestrator(supabase)
 # Store active executions (in-memory for MVP)
 active_executions: dict = {}
 
+# Hold sandbox references between approve-project and approve-plan requests.
+# The Modal VM stays alive for 30 min (timeout=1800). We just park the Python
+# object here so the second HTTP request can pick it up without re-provisioning.
+_sandbox_cache: dict[str, object] = {}   # project_id -> SandboxContext
+_context_cache: dict[str, object] = {}   # project_id -> RepoContext dataclass
+
 
 # =====================================================
 # HEALTH CHECK
@@ -237,12 +243,24 @@ def approve_plan_endpoint(plan_id: UUID, body: dict | None = None):
                 status_code=500, detail="Project not found after plan approval"
             )
 
-        # Trigger the coder workflow
+        # Trigger the coder workflow, reusing the sandbox from approve-project if available
+        pid = str(plan.project_id)
+        cached_sandbox = _sandbox_cache.pop(pid, None)
+        cached_context = _context_cache.pop(pid, None)
+
+        if cached_sandbox:
+            logger.info(f"REUSING cached sandbox for project {pid}")
+        else:
+            logger.info(f"No cached sandbox for project {pid}, will create fresh one")
+
         logger.info(f"AUTO-TRIGGERING CODER WORKFLOW for project {plan.project_id}")
 
         try:
             result = coder_orchestrator.execute_issue_workflow(
-                plan.project_id, project.repo_config_id
+                plan.project_id,
+                project.repo_config_id,
+                existing_sandbox_ctx=cached_sandbox,
+                cached_repo_context=cached_context,
             )
             return {
                 "status": "approved",
@@ -374,12 +392,17 @@ def approve_project_request(project_id: UUID, body: dict | None = None):
             "issue_created",
         )
 
-        # Cleanup sandbox before plan generation (plan gen creates its own)
-        if sandbox_ctx:
-            cleanup_sb(sandbox_ctx)
-            sandbox_ctx = None
+        # Keep sandbox alive for reuse by the coder workflow.
+        # Store it in the in-memory cache keyed by project_id.
+        pid = str(project_id)
+        _sandbox_cache[pid] = sandbox_ctx
+        _context_cache[pid] = repo_context_obj  # Store the RepoContext dataclass, not the dict
+        logger.info(f"Sandbox cached for project {pid} (will be reused by coder workflow)")
 
-        # Auto-generate plan
+        # Prevent the error-path cleanup from touching this sandbox
+        sandbox_ctx = None
+
+        # Auto-generate plan (uses cached repo_context, no new sandbox needed)
         plan_id = None
         if auto_generate_plan:
             logger.info(f"Auto-generating plan for project {project_id}")
@@ -413,15 +436,22 @@ def approve_project_request(project_id: UUID, body: dict | None = None):
         db.create_execution_log(
             supabase, project_id, f"Approval failed: {e}", LogLevel.ERROR, "approval_error"
         )
+        # Clean up cached sandbox on error
+        pid = str(project_id)
+        stale = _sandbox_cache.pop(pid, None)
+        _context_cache.pop(pid, None)
+        if stale:
+            cleanup_sb(stale)
         raise HTTPException(status_code=500, detail=str(e))
 
     finally:
+        # Only clean up if sandbox_ctx is still set (i.e. we didn't cache it)
         if sandbox_ctx:
             if SANDBOX_MODE == "local":
-                from local_sandbox import cleanup_sandbox as cleanup_sb
+                from local_sandbox import cleanup_sandbox as cleanup_sb2
             else:
-                from modal_sandbox import cleanup_sandbox as cleanup_sb
-            cleanup_sb(sandbox_ctx)
+                from modal_sandbox import cleanup_sandbox as cleanup_sb2
+            cleanup_sb2(sandbox_ctx)
 
 
 # =====================================================

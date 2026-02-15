@@ -221,6 +221,8 @@ class CoderOrchestrator:
         self,
         project_id: UUID,
         repo_config_id: UUID,
+        existing_sandbox_ctx: Optional[SandboxContext] = None,
+        cached_repo_context: Optional[RepoContext] = None,
     ) -> dict:
         """
         Execute the full coding workflow for a project.
@@ -228,6 +230,9 @@ class CoderOrchestrator:
         Args:
             project_id: Project UUID (must have github_issue_url set)
             repo_config_id: Repository config UUID
+            existing_sandbox_ctx: If provided, reuse this sandbox instead of
+                creating a new one (avoids re-cloning and re-installing deps).
+            cached_repo_context: If provided, skip repo context detection.
 
         Returns:
             Result dict with status, pr_url, pr_number
@@ -250,13 +255,21 @@ class CoderOrchestrator:
             if not project:
                 raise WorkflowError(f"Project not found: {project_id}")
 
-            # Step 3: Create Modal sandbox
-            self._log_step(project_id, "create_sandbox", "Creating Modal cloud sandbox")
-            sandbox_ctx = create_sandbox(project_id, repo_config)
+            # Step 3: Create or reuse Modal sandbox
+            if existing_sandbox_ctx:
+                self._log_step(project_id, "reuse_sandbox", "Reusing existing sandbox (skipping clone + install)")
+                sandbox_ctx = existing_sandbox_ctx
+            else:
+                self._log_step(project_id, "create_sandbox", "Creating Modal cloud sandbox")
+                sandbox_ctx = create_sandbox(project_id, repo_config)
 
-            # Step 4: Detect repo context
-            self._log_step(project_id, "detect_context", "Detecting repository context")
-            repo_context = detect_repo_context(sandbox_ctx)
+            # Step 4: Detect or reuse repo context
+            if cached_repo_context:
+                self._log_step(project_id, "reuse_context", "Using cached repo context (skipping detection)")
+                repo_context = cached_repo_context
+            else:
+                self._log_step(project_id, "detect_context", "Detecting repository context")
+                repo_context = detect_repo_context(sandbox_ctx)
 
             # Step 5: Get existing plan
             plan = None
