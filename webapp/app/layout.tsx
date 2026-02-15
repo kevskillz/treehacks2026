@@ -9,7 +9,7 @@ const defaultUrl = process.env.VERCEL_URL
 
 export const metadata: Metadata = {
   metadataBase: new URL(defaultUrl),
-  title: "Matrix",
+  title: "Current",
   description: "See what your users really want",
   icons: {
     icon: "/Logo.png",

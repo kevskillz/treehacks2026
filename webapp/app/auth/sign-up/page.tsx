@@ -12,14 +12,14 @@ export default function Page() {
             <div className="flex h-8 w-8 items-center justify-center rounded-md bg-foreground">
               <Image
                 src="/Logo.png"
-                alt="Matrix logo"
+                alt="Current logo"
                 width={24}
                 height={24}
                 className="h-6 w-6 rounded-sm invert dark:invert-0"
                 priority
               />
             </div>
-            <span className="font-semibold text-foreground tracking-tight">Matrix</span>
+            <span className="font-semibold text-foreground tracking-tight">Current</span>
           </Link>
         </div>
         <SignUpForm />

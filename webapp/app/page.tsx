@@ -34,14 +34,14 @@ export default function LandingPage() {
             <div className="flex h-7 w-7 items-center justify-center rounded-md bg-black">
               <Image
                 src="/Logo.png"
-                alt="Matrix logo"
+                alt="Current logo"
                 width={18}
                 height={18}
                 className="h-[18px] w-[18px] rounded-sm invert"
                 priority
               />
             </div>
-            <span className="text-base font-semibold text-gray-900 tracking-tight">Matrix</span>
+            <span className="text-base font-semibold text-gray-900 tracking-tight">Current</span>
           </Link>
           <nav className="flex items-center gap-6 text-sm">
             <Link href="/features" className="text-gray-500 hover:text-gray-900 transition-colors">
@@ -71,7 +71,7 @@ export default function LandingPage() {
               </h1>
 
               <p className="mt-6 text-base text-gray-500 leading-relaxed max-w-md">
-                Matrix monitors what your users are saying on social media, creates implementation plans, and delivers pull requests — autonomously.
+                Current monitors what your users are saying on social media, creates implementation plans, and delivers pull requests — autonomously.
               </p>
 
               <div className="flex items-center gap-4 mt-8">
@@ -100,7 +100,7 @@ export default function LandingPage() {
 
         {/* Footer */}
         <footer className="flex items-center justify-between px-8 py-6 lg:px-16 text-xs text-gray-400">
-          <span>&copy; 2025 Matrix</span>
+          <span>&copy; 2026 Current</span>
           <div className="flex items-center gap-6">
             <Link href="#" className="hover:text-gray-600 transition-colors">Privacy</Link>
             <Link href="#" className="hover:text-gray-600 transition-colors">Terms</Link>

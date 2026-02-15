@@ -33,7 +33,7 @@ function Logo({ isCollapsed }: { isCollapsed: boolean }) {
       <div className="flex h-7 w-7 items-center justify-center rounded-md bg-foreground flex-shrink-0">
         <Image
           src="/Logo.png"
-          alt="Matrix logo"
+          alt="Current logo"
           width={20}
           height={20}
           className="h-5 w-5 rounded-sm invert dark:invert-0"
@@ -42,7 +42,7 @@ function Logo({ isCollapsed }: { isCollapsed: boolean }) {
       </div>
       {!isCollapsed && (
         <span className="text-sm font-semibold text-foreground tracking-tight whitespace-nowrap">
-          Matrix
+          Current
         </span>
       )}
     </div>
