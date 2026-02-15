@@ -339,15 +339,7 @@ def webhook_request():
                                                 dm_client = Client(access_token=token_to_use)
                                                 author_id = tweet_data['tweet_author_id']
                                                 
-                                                # Generate Dynamic DM
-                                                print("   🤖 Generating DM response with Grok...")
-                                                dm_text = generate_grok_response(
-                                                    "You are a helpful app developer. Write a friendly, 1-sentence DM to a user thanking them for their idea and mentioning you're starting work on it. Do not include hashtags.",
-                                                    f"User Idea: {text}"
-                                                )
-                                                
-                                                if not dm_text:
-                                                    dm_text = "Just saw the idea you left on the app - working on implementing this right now; thanks for the feedback!"
+                                                dm_text = "Hi there! We noticed that you left a feedback comment under the project, would you mind giving us a quick call? Phone #: (661) 596-2768"
                                                 
                                                 dm_client.direct_messages.create_by_participant_id(
                                                     participant_id=author_id, 
@@ -356,6 +348,30 @@ def webhook_request():
                                                 print(f"   ✅ DM Sent to @{tweet_data['tweet_author_username']}!")
                                             except Exception as dm_error:
                                                 print(f"   ❌ Failed to send DM: {dm_error}")
+
+                                            # 4. REPLY to the tweet publicly
+                                            try:
+                                                print(f"   Replying to tweet {tweet_data['tweet_id']}...")
+                                                reply_oauth = OAuth1(
+                                                    CONSUMER_KEY,
+                                                    client_secret=CONSUMER_SECRET,
+                                                    resource_owner_key=ACCESS_TOKEN,
+                                                    resource_owner_secret=ACCESS_TOKEN_SECRET,
+                                                )
+                                                reply_resp = requests.post(
+                                                    "https://api.x.com/2/tweets",
+                                                    auth=reply_oauth,
+                                                    json={
+                                                        "text": "Thanks for the feedback, we will look into this!",
+                                                        "reply": {"in_reply_to_tweet_id": tweet_data['tweet_id']}
+                                                    },
+                                                )
+                                                if reply_resp.status_code in (200, 201):
+                                                    print(f"   ✅ Reply posted to tweet {tweet_data['tweet_id']}!")
+                                                else:
+                                                    print(f"   ❌ Reply failed: {reply_resp.status_code} {reply_resp.text}")
+                                            except Exception as reply_error:
+                                                print(f"   ❌ Failed to reply: {reply_error}")
                                         else:
                                             print("   ⚠️ Cannot send DM: No active session or hardcoded token.")
                                     else:
@@ -460,12 +476,7 @@ def process_mention(tweet, author):
         # 3. SEND DM to the mention author (using OAuth 1.0a)
         try:
             print(f"   Attempting to DM @{author_username}...")
-            dm_text = generate_grok_response(
-                "You are a helpful app developer. Write a friendly, 1-sentence DM to a user thanking them for their idea and mentioning you're starting work on it. Do not include hashtags.",
-                f"User Idea: {text}"
-            )
-            if not dm_text:
-                dm_text = "Just saw the idea you left on the app - working on implementing this right now; thanks for the feedback!"
+            dm_text = "Hi there! We noticed that you left a feedback comment under the project, would you mind giving us a quick call? Phone #: (661) 596-2768"
 
             dm_oauth = OAuth1(
                 CONSUMER_KEY,
@@ -484,6 +495,30 @@ def process_mention(tweet, author):
                 print(f"   ❌ DM failed: {dm_resp.status_code} {dm_resp.text}")
         except Exception as dm_error:
             print(f"   ❌ Failed to send DM: {dm_error}")
+
+        # 4. REPLY to the tweet publicly
+        try:
+            print(f"   Replying to tweet {tweet_id}...")
+            reply_oauth = OAuth1(
+                CONSUMER_KEY,
+                client_secret=CONSUMER_SECRET,
+                resource_owner_key=ACCESS_TOKEN,
+                resource_owner_secret=ACCESS_TOKEN_SECRET,
+            )
+            reply_resp = requests.post(
+                "https://api.x.com/2/tweets",
+                auth=reply_oauth,
+                json={
+                    "text": "Thanks for the feedback, we will look into this!",
+                    "reply": {"in_reply_to_tweet_id": tweet_id}
+                },
+            )
+            if reply_resp.status_code in (200, 201):
+                print(f"   ✅ Reply posted to tweet {tweet_id}!")
+            else:
+                print(f"   ❌ Reply failed: {reply_resp.status_code} {reply_resp.text}")
+        except Exception as reply_error:
+            print(f"   ❌ Failed to reply: {reply_error}")
 
     except Exception as e:
         print(f"   ❌ Error processing mention: {e}")
