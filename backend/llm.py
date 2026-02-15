@@ -1,7 +1,6 @@
 """
-LLM integration using Anthropic Claude SDK.
-Replaces the old Grok/xAI SDK integration.
-Handles embeddings, plan generation, sentiment, and tweet aggregation.
+LLM integration using OpenAI SDK.
+Handles plan generation, sentiment, tech-stack detection, and tweet aggregation.
 """
 
 import os
@@ -10,9 +9,7 @@ import logging
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 
-from anthropic import Anthropic
-from xai_sdk import Client as XAIClient
-from xai_sdk.chat import system, user
+from openai import OpenAI
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
@@ -22,11 +19,9 @@ load_dotenv(dotenv_path=env_path)
 
 logger = logging.getLogger(__name__)
 
-# Default model for reasoning tasks
-DEFAULT_MODEL = "claude-sonnet-4-20250514"
-
-# Grok model for planning
-GROK_PLANNING_MODEL = "grok-4-1-fast-reasoning"
+# OpenAI models
+PLANNING_MODEL = "gpt-5.1-codex-mini"
+UTILITY_MODEL = "gpt-4.1-nano"
 
 
 # Pydantic Models for structured outputs
@@ -56,63 +51,54 @@ class ProjectAggregation(BaseModel):
     )
 
 
-class ClaudeClient:
-    """Client for Anthropic Claude API."""
+class OpenAIClient:
+    """Client for OpenAI API."""
 
-    def __init__(self, api_key: Optional[str] = None):
-        """Initialize Claude client with API key."""
-        self.api_key = api_key or os.getenv("ANTHROPIC_API_KEY")
-        self.client = Anthropic(api_key=self.api_key)
-        self.grok_client = XAIClient(api_key=os.getenv("XAI_API_KEY"))
+    def __init__(self):
+        """Initialize OpenAI client with API key."""
+        self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
     def _chat(
         self,
         system_prompt: str,
         user_prompt: str,
-        model: str = DEFAULT_MODEL,
-        max_tokens: int = 4096,
+        model: str = UTILITY_MODEL,
     ) -> str:
-        """Send a single-turn chat message and return the text response."""
-        response = self.client.messages.create(
+        """Send a single-turn chat message via OpenAI and return the text response."""
+        response = self.client.chat.completions.create(
             model=model,
-            max_tokens=max_tokens,
-            system=system_prompt,
-            messages=[{"role": "user", "content": user_prompt}],
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
         )
-        return response.content[0].text
+        return response.choices[0].message.content
 
-    def _grok_chat(
+    def _planning_chat(
         self,
         system_prompt: str,
         user_prompt: str,
-        model: str = GROK_PLANNING_MODEL,
+        model: str = PLANNING_MODEL,
         max_tokens: int = 4096,
     ) -> str:
-        """Send a chat message via xAI SDK."""
-        chat = self.grok_client.chat.create(model=model)
-        chat.append(system(system_prompt))
-        chat.append(user(user_prompt))
-        response = chat.sample()
-        return response.content
+        """Chat with the planning model using the Responses API (required for codex models)."""
+        response = self.client.responses.create(
+            model=model,
+            instructions=system_prompt,
+            input=user_prompt,
+        )
+        return response.output_text
 
     # ------------------------------------------------------------------
-    # Embeddings — Claude doesn't have a native embeddings endpoint.
-    # We use Voyager-3 via the API if available, or fall back to a
-    # simple hashing approach.  For the hackathon MVP we skip real
-    # embeddings and let Supabase vector search work with whatever
-    # the old data already has.
+    # Embeddings
     # ------------------------------------------------------------------
 
     def get_embedding(self, text: str) -> List[float]:
         """
         Generate embedding vector for text.
-        NOTE: Anthropic doesn't provide embeddings. For the hackathon
-        we return a zero vector; swap in a real provider (OpenAI, Voyage)
-        for production.
+        NOTE: Not supported yet — returning zero vector for hackathon MVP.
         """
-        logger.warning(
-            "Embeddings not natively supported by Claude — returning zero vector"
-        )
+        logger.warning("Embeddings not supported — returning zero vector")
         return [0.0] * 1536
 
     # ------------------------------------------------------------------
@@ -167,39 +153,11 @@ class ClaudeClient:
                 "Format the plan as clean markdown with NO code blocks."
             )
 
-            plan_content = self._grok_chat(system_msg, user_msg)
-            verified_plan = self.verify_plan_formatting(plan_content)
-            return verified_plan
+            return self._planning_chat(system_msg, user_msg)
 
         except Exception as e:
             logger.error(f"Error generating plan: {e}")
             raise
-
-    def verify_plan_formatting(self, plan_content: str) -> str:
-        """Verify and fix plan formatting to ensure no code snippets."""
-        try:
-            prompt = (
-                f"Verify and clean this implementation plan. Remove any code snippets "
-                f"while keeping the plan actionable.\n\n"
-                f"**Plan Content:**\n{plan_content}\n\n"
-                "**Requirements:**\n"
-                "1. Remove ALL code blocks that contain actual implementation code\n"
-                "2. Keep file path references (in backticks like `src/file.ts`)\n"
-                "3. Keep command examples for running tests (like `npm test`)\n"
-                "4. Replace code snippets with plain English descriptions\n"
-                "5. Maintain proper markdown formatting\n\n"
-                "Return ONLY the cleaned plan content as markdown."
-            )
-
-            return self._grok_chat(
-                "You are a technical editor ensuring implementation plans contain "
-                "no code snippets. Return only the cleaned markdown plan.",
-                prompt,
-            )
-
-        except Exception as e:
-            logger.warning(f"Failed to verify plan formatting: {e}")
-            return plan_content
 
     # ------------------------------------------------------------------
     # Sentiment & Classification
@@ -373,7 +331,9 @@ class ClaudeClient:
                 "1. Reference specific files/directories\n"
                 "2. Suggest which parts of the codebase might need changes\n"
                 "3. Add technical context based on the detected tech stack\n"
-                "4. Keep the user's original intent intact\n\n"
+                "4. Keep the user's original intent intact\n"
+                "5. Title must be clean, concise, no markdown, max 80 chars\n"
+                "6. Description must be proper GitHub-flavored markdown\n\n"
                 "Do NOT include any actual code snippets.\n\n"
                 'Output a JSON object with "title" and "description" keys.'
             )
@@ -395,39 +355,6 @@ class ClaudeClient:
             logger.warning(f"Failed to enrich issue with context: {e}")
             return {"title": title, "description": description}
 
-    def verify_issue_formatting(
-        self, title: str, description: str
-    ) -> Dict[str, str]:
-        """Verify and fix markdown formatting of issue title and description."""
-        try:
-            prompt = (
-                f"Verify and fix the formatting of this GitHub issue.\n\n"
-                f"**Title:**\n{title}\n\n"
-                f"**Description:**\n{description}\n\n"
-                "Requirements:\n"
-                "1. Title: Clean, concise, no markdown, max 80 chars\n"
-                "2. Description: Proper GitHub-flavored markdown\n"
-                "3. Remove any code blocks containing actual code\n\n"
-                'Output a JSON object with "title" and "description" keys.'
-            )
 
-            result = self._chat(
-                "You are a technical editor ensuring GitHub issues are properly "
-                "formatted. Output valid JSON only. Remove code snippets.",
-                prompt,
-            )
-
-            data = json.loads(result.strip().strip("```json").strip("```"))
-            logger.info("Issue formatting verified")
-            return {
-                "title": data.get("title", title)[:80],
-                "description": data.get("description", description),
-            }
-
-        except Exception as e:
-            logger.warning(f"Failed to verify issue formatting: {e}")
-            return {"title": title, "description": description}
-
-
-# Global instance
-claude_client = ClaudeClient()
+# Global instance — used as `claude_client` for backward compat with imports
+claude_client = OpenAIClient()

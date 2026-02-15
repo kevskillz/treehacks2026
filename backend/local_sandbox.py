@@ -166,11 +166,12 @@ def create_sandbox(
         shutil.rmtree(base_dir)
     os.makedirs(base_dir, exist_ok=True)
 
-    xai_api_key = os.getenv("XAI_API_KEY", "")
+    openai_api_key = os.getenv("OPENAI_API_KEY", "")
 
     env = {
         "ANTHROPIC_API_KEY": anthropic_key,
-        "XAI_API_KEY": xai_api_key,
+        "OPENAI_API_KEY": openai_api_key,
+        "CODEX_API_KEY": openai_api_key,
         "GITHUB_TOKEN": github_token,
         "GH_TOKEN": github_token,
     }
@@ -205,19 +206,9 @@ def create_sandbox(
         # Configure gh CLI with the token
         _run_local(["gh", "auth", "setup-git"], cwd=repo_dir, env=env)
 
-        # Install dependencies (try yarn first, then npm)
-        logger.info("Installing dependencies...")
-        try:
-            _run_local(["yarn", "install"], cwd=repo_dir, env=env)
-            logger.info("Dependencies installed with yarn")
-        except SandboxError:
-            try:
-                _run_local(["npm", "install"], cwd=repo_dir, env=env)
-                logger.info("Dependencies installed with npm")
-            except SandboxError as e:
-                logger.warning(
-                    f"Dependency install failed (non-fatal): {e}"
-                )
+        # NOTE: Dependencies are NOT installed here — they are deferred to
+        # the coder phase (install_dependencies) so that the approval flow
+        # (context detection, issue creation, plan generation) is faster.
 
         logger.info(f"Local sandbox ready for project {project_id}")
 
@@ -251,6 +242,33 @@ def cleanup_sandbox(sandbox_ctx: SandboxContext) -> None:
             )
     except Exception as e:
         logger.warning(f"Failed to clean up local sandbox (non-fatal): {e}")
+
+
+# =====================================================
+# DEFERRED DEPENDENCY INSTALL
+# =====================================================
+
+
+def install_dependencies(sandbox_ctx: SandboxContext) -> None:
+    """
+    Install project dependencies inside the sandbox.
+
+    Called by the coder workflow right before running Codex CLI,
+    NOT during sandbox creation, so that the approval flow stays fast.
+    """
+    repo_dir = sandbox_ctx.repo_dir
+    env = sandbox_ctx.sandbox._env if hasattr(sandbox_ctx.sandbox, '_env') else None
+
+    logger.info("Installing dependencies...")
+    try:
+        _run_local(["yarn", "install"], cwd=repo_dir, env=env)
+        logger.info("Dependencies installed with yarn")
+    except SandboxError:
+        try:
+            _run_local(["npm", "install"], cwd=repo_dir, env=env)
+            logger.info("Dependencies installed with npm")
+        except SandboxError as e:
+            logger.warning(f"Dependency install failed (non-fatal): {e}")
 
 
 # =====================================================

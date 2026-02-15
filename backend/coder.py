@@ -1,14 +1,15 @@
 """
-Core orchestrator for Grok Code CLI integration via Modal/local sandboxes.
+Core orchestrator for Codex CLI integration via Modal/local sandboxes.
 Manages coding sessions and workflow coordination.
 
-Uses the Grok CLI (@xai-official/grok) for agentic code generation.
+Uses the Codex CLI (@openai/codex) for agentic code generation.
 All coding happens inside Modal VMs or local sandboxes.
 """
 
 import json
 import logging
 import os
+import subprocess
 from uuid import UUID
 from datetime import datetime, timezone
 from dataclasses import dataclass
@@ -21,9 +22,10 @@ import db
 SANDBOX_MODE = os.getenv("SANDBOX_MODE", "modal")
 
 if SANDBOX_MODE == "local":
-    from local_sandbox import create_sandbox, cleanup_sandbox
+    from local_sandbox import create_sandbox, cleanup_sandbox, install_dependencies
 else:
     from modal_sandbox import create_sandbox, cleanup_sandbox
+    install_dependencies = None  # Modal image has deps pre-installed
 
 # Shared helpers work with both sandbox types via duck-typing
 from modal_sandbox import (
@@ -31,6 +33,7 @@ from modal_sandbox import (
     commit_changes,
     push_branch,
     get_git_diff,
+    get_git_status,
     SandboxContext,
     SandboxError,
 )
@@ -60,8 +63,8 @@ class GitHubError(WorkflowError):
     pass
 
 
-class GrokSessionError(WorkflowError):
-    """Grok Code session error."""
+class CodexSessionError(WorkflowError):
+    """Codex CLI session error."""
     pass
 
 
@@ -84,16 +87,16 @@ class IssueData:
 
 
 # =====================================================
-# GROK CODE SESSION (runs inside Modal/local sandbox)
+# CODEX CLI SESSION (runs inside Modal/local sandbox)
 # =====================================================
 
 
-class GrokCoderSession:
+class CodexCoderSession:
     """
-    Manages Grok Code CLI running inside a Modal or local sandbox.
+    Manages Codex CLI running inside a Modal or local sandbox.
 
-    Uses the `grok` CLI (@xai-official/grok) in headless single-turn
-    mode with streaming-json output for real-time visibility.
+    Uses the `codex` CLI (@openai/codex) in headless single-turn
+    mode with JSON output for real-time visibility.
     """
 
     def __init__(self, sandbox_ctx: SandboxContext):
@@ -101,41 +104,24 @@ class GrokCoderSession:
 
     def run_prompt(self, prompt: str, timeout: int = 600) -> str:
         """
-        Run a single prompt using Grok Code CLI in headless mode.
-        Uses streaming-json output for real-time logging.
+        Run a single prompt using Codex CLI in headless mode.
+        Uses JSON output for real-time logging.
 
         Args:
             prompt: Prompt text
             timeout: Timeout in seconds
 
         Returns:
-            Output text from Grok
+            Output text from Codex
         """
-        logger.info(f"Running Grok Code prompt ({len(prompt)} chars)")
+        logger.info(f"Running Codex prompt ({len(prompt)} chars)")
 
-        escaped_prompt = prompt.replace("'", "'\\''")
+        if SANDBOX_MODE == "local":
+            process = self._run_local_codex(prompt)
+        else:
+            process = self._run_modal_codex(prompt)
 
-        # In Modal mode, stdbuf forces line-buffered stdout so we
-        # get real-time streaming instead of buffered chunks.
-        # On macOS (local mode), stdbuf is not available — but
-        # subprocess already streams line-by-line.
-        stdbuf_prefix = "stdbuf -oL " if SANDBOX_MODE == "modal" else ""
-
-        cmd = (
-            f"cd {self.sandbox_ctx.repo_dir} && "
-            f"{stdbuf_prefix}grok "
-            f"--single '{escaped_prompt}' "
-            f"--cwd {self.sandbox_ctx.repo_dir} "
-            f"--model grok-code-fast-1 "
-            f"--output-format streaming-json "
-            f"--yolo"
-        )
-
-        process = self.sandbox_ctx.sandbox.exec(
-            "bash", "-c", cmd,
-        )
-
-        # Stream stdout line-by-line — each line is an NDJSON event from Grok CLI
+        # Stream stdout line-by-line — each line is an NDJSON event from Codex CLI
         stdout_lines = []
         assistant_text = []
         for line in process.stdout:
@@ -143,42 +129,7 @@ class GrokCoderSession:
             if not line:
                 continue
             stdout_lines.append(line)
-            # Parse the NDJSON event for readable log output
-            try:
-                event = json.loads(line)
-                event_type = event.get("type", "unknown")
-                data = event.get("data", "")
-
-                if event_type == "thought":
-                    logger.info(f"[grok-code] 💭 {data[:200]}")
-                elif event_type == "text":
-                    assistant_text.append(data)
-                    logger.info(f"[grok-code] 💬 {data[:200]}")
-                elif event_type == "tool_call":
-                    tool_name = event.get("name", data)
-                    tool_input = event.get("input", {})
-                    logger.info(f"[grok-code] 🔧 TOOL: {tool_name}")
-                    if "file" in str(tool_input).lower() or "path" in str(tool_input).lower():
-                        logger.info(f"[grok-code]    → {str(tool_input)[:150]}")
-                elif event_type == "tool_result":
-                    logger.info(f"[grok-code]    ✅ Done")
-                elif event_type in ("file_write", "write"):
-                    logger.info(f"[grok-code]    📝 Writing: {data}")
-                elif event_type in ("file_read", "read"):
-                    logger.info(f"[grok-code]    📖 Reading: {data}")
-                elif event_type in ("file_edit", "edit"):
-                    logger.info(f"[grok-code]    ✏️  Editing: {data}")
-                elif event_type in ("bash", "command"):
-                    logger.info(f"[grok-code]    💻 Running: {data[:100]}")
-                elif event_type == "error":
-                    logger.error(f"[grok-code] ❌ ERROR: {data}")
-                elif event_type in ("done", "complete"):
-                    logger.info(f"[grok-code] ✅ {data}")
-                else:
-                    logger.info(f"[grok-code] [{event_type}] {data[:100] if data else str(event)[:100]}")
-            except json.JSONDecodeError:
-                if line:
-                    logger.info(f"[grok-code] {line[:200]}")
+            self._parse_codex_event(line, assistant_text)
 
         stderr = process.stderr.read()
         process.wait()
@@ -186,20 +137,111 @@ class GrokCoderSession:
         stdout = "\n".join(stdout_lines)
 
         if returncode != 0:
-            logger.warning(
-                f"Grok Code exited with code {returncode}: {stderr[:500]}"
+            logger.error(
+                f"Codex exited with code {returncode}\n"
+                f"stderr: {stderr[:1000]}\n"
+                f"stdout (last 500): {stdout[-500:]}"
             )
+        else:
+            logger.info(f"Codex finished successfully: {len(stdout)} chars output")
 
-        logger.info(f"Grok Code finished: {len(stdout)} chars output")
         return "\n".join(assistant_text) if assistant_text else stdout
 
+    def _run_local_codex(self, prompt: str):
+        """Spawn codex CLI directly via subprocess.Popen (no shell)."""
+        from local_sandbox import LocalProcess
 
-def run_grok_fix(sandbox_ctx: SandboxContext, fix_prompt: str) -> str:
+        cmd = [
+            "codex", "exec",
+            prompt,
+            "--cd", self.sandbox_ctx.repo_dir,
+            "--model", "gpt-5.1-codex-mini",
+            "--json",
+            "--full-auto",
+        ]
+        logger.info(f"[local] Spawning codex CLI: {cmd[0]} exec <prompt> --cd {self.sandbox_ctx.repo_dir}")
+
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            cwd=self.sandbox_ctx.repo_dir,
+            env={**os.environ},
+        )
+        return LocalProcess(proc)
+
+    def _run_modal_codex(self, prompt: str):
+        """Run codex CLI inside Modal sandbox via bash -c."""
+        escaped_prompt = prompt.replace("'", "'\\''")
+
+        cmd = (
+            f"cd {self.sandbox_ctx.repo_dir} && "
+            f"stdbuf -oL codex exec "
+            f"'{escaped_prompt}' "
+            f"--cd {self.sandbox_ctx.repo_dir} "
+            f"--model gpt-5.1-codex-mini "
+            f"--json "
+            f"--full-auto"
+        )
+
+        return self.sandbox_ctx.sandbox.exec("bash", "-c", cmd)
+
+    def _parse_codex_event(self, line: str, assistant_text: list) -> None:
+        """Parse a single NDJSON event line from Codex CLI output."""
+        try:
+            event = json.loads(line)
+            event_type = event.get("type", "unknown")
+            data = event.get("data", "")
+
+            if event_type == "thought":
+                logger.info(f"[codex] 💭 {data[:200]}")
+            elif event_type == "text":
+                assistant_text.append(data)
+                logger.info(f"[codex] 💬 {data[:200]}")
+            elif event_type == "tool_call":
+                tool_name = event.get("name", data)
+                tool_input = event.get("input", {})
+                logger.info(f"[codex] 🔧 TOOL: {tool_name}")
+                if "file" in str(tool_input).lower() or "path" in str(tool_input).lower():
+                    logger.info(f"[codex]    → {str(tool_input)[:150]}")
+            elif event_type == "tool_result":
+                logger.info(f"[codex]    ✅ Done")
+            elif event_type in ("file_write", "write"):
+                logger.info(f"[codex]    📝 Writing: {data}")
+            elif event_type in ("file_read", "read"):
+                logger.info(f"[codex]    📖 Reading: {data}")
+            elif event_type in ("file_edit", "edit"):
+                logger.info(f"[codex]    ✏️  Editing: {data}")
+            elif event_type in ("bash", "command"):
+                logger.info(f"[codex]    💻 Running: {data[:100]}")
+            elif event_type == "error":
+                logger.error(f"[codex] ❌ ERROR: {data}")
+            elif event_type in ("done", "complete"):
+                logger.info(f"[codex] ✅ {data}")
+            elif event_type in ("thread.started", "turn.started"):
+                logger.info(f"[codex] ▶ {event_type}")
+            elif event_type == "turn.completed":
+                logger.info(f"[codex] ✅ Turn completed")
+            elif event_type == "turn.failed":
+                logger.error(f"[codex] ❌ Turn failed: {data}")
+            elif event_type in ("item.started", "item.completed"):
+                item_type = event.get("item_type", "")
+                logger.info(f"[codex] [{event_type}] {item_type} {data[:100] if data else ''}")
+            else:
+                logger.info(f"[codex] [{event_type}] {data[:100] if data else str(event)[:100]}")
+        except json.JSONDecodeError:
+            if line:
+                logger.info(f"[codex] {line[:200]}")
+
+
+def run_codex_fix(sandbox_ctx: SandboxContext, fix_prompt: str) -> str:
     """
-    Run a fix prompt through Grok Code in the sandbox.
+    Run a fix prompt through Codex CLI in the sandbox.
     Used as the callback for verify_and_iterate.
     """
-    session = GrokCoderSession(sandbox_ctx)
+    session = CodexCoderSession(sandbox_ctx)
     return session.run_prompt(fix_prompt)
 
 
@@ -217,7 +259,7 @@ class CoderOrchestrator:
     2. Clone repo + create branch
     3. Detect repo context
     4. Generate test cases
-    5. Run Grok Code CLI for implementation
+    5. Run Codex CLI for implementation
     6. Verify (test, build, lint, review) and iterate
     7. Commit, push, create PR
     8. Update Supabase with results
@@ -297,11 +339,16 @@ class CoderOrchestrator:
 
             test_cases = generate_test_cases(issue_data, repo_context)
 
-            # Step 7: Start Grok Code session
-            self._log_step(project_id, "start_grok_session", "Starting Grok Code CLI in sandbox")
+            # Step 6b: Install dependencies (deferred from sandbox creation for speed)
+            if install_dependencies:
+                self._log_step(project_id, "install_deps", "Installing project dependencies")
+                install_dependencies(sandbox_ctx)
+
+            # Step 7: Start Codex CLI session
+            self._log_step(project_id, "start_codex_session", "Starting Codex CLI in sandbox")
             db.update_project_status(self.supabase, project_id, ProjectStatus.EXECUTING)
 
-            grok_session = GrokCoderSession(sandbox_ctx)
+            codex_session = CodexCoderSession(sandbox_ctx)
 
             # Store sandbox in database
             db_sandbox = db.create_modal_sandbox(self.supabase, {
@@ -314,11 +361,11 @@ class CoderOrchestrator:
             })
 
             # Step 8: Send implementation prompt
-            self._log_step(project_id, "implement_feature", "Implementing feature with Grok Code")
+            self._log_step(project_id, "implement_feature", "Implementing feature with Codex CLI")
             implementation_prompt = self._build_implementation_prompt(
                 issue_data, plan, test_cases
             )
-            output = grok_session.run_prompt(implementation_prompt)
+            output = codex_session.run_prompt(implementation_prompt)
             logger.info(f"Implementation output: {len(output)} chars")
 
             # Step 9: Verification and iteration cycle
@@ -327,7 +374,7 @@ class CoderOrchestrator:
             success, verification_results = verify_and_iterate(
                 sandbox_ctx,
                 repo_config,
-                run_grok_fix,
+                run_codex_fix,
                 max_iterations=1,
                 skip_review=True,
             )
@@ -348,20 +395,38 @@ class CoderOrchestrator:
                 })
                 return {"status": "failed", "reason": "verification_failed"}
 
-            # Step 10: Commit changes
+            # Step 10: Guard — check that Codex actually made code changes
+            git_status = get_git_status(sandbox_ctx)
+            logger.info(f"Git status after Codex:\n{git_status}")
+
+            if not git_status.strip():
+                raise WorkflowError("Codex made no changes — aborting commit")
+
+            changed_files = [
+                f for f in git_status.strip().split('\n')
+                if f.strip() and not f.strip().endswith('yarn.lock')
+            ]
+            if not changed_files:
+                raise WorkflowError(
+                    "Codex made no code changes (only lock files) — aborting commit"
+                )
+
+            logger.info(f"Changed files: {changed_files}")
+
+            # Step 11: Commit changes
             self._log_step(project_id, "commit_changes", "Committing changes")
             commit_message = (
                 f"Fix: {issue_data.title}\n\n"
                 f"Fixes #{issue_data.number}\n\n"
-                f"Generated by @coder (Grok Code)"
+                f"Generated by @coder (OpenAI Codex)"
             )
             commit_changes(sandbox_ctx, commit_message)
 
-            # Step 11: Push branch
+            # Step 12: Push branch
             self._log_step(project_id, "push_branch", "Pushing branch to remote")
             push_branch(sandbox_ctx)
 
-            # Step 12: Create PR
+            # Step 13: Create PR
             self._log_step(project_id, "create_pr", "Creating pull request")
             github_issue = GitHubIssue(
                 number=issue_data.number,
@@ -398,7 +463,7 @@ class CoderOrchestrator:
                 "completed_at": datetime.now(timezone.utc).isoformat(),
             })
 
-            # Step 13: Mark complete
+            # Step 14: Mark complete
             db.update_project_status(
                 self.supabase, project_id, ProjectStatus.COMPLETED
             )
@@ -453,7 +518,7 @@ class CoderOrchestrator:
     def _build_implementation_prompt(
         self, issue: IssueData, plan, test_cases: str
     ) -> str:
-        """Build comprehensive prompt for Grok Code."""
+        """Build comprehensive prompt for Codex CLI."""
         return f"""I need you to implement a fix for the following GitHub issue:
 
 # Issue Details

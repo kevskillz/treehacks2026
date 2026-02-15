@@ -170,7 +170,7 @@ class Notification(BaseModel):
 class ModalSandbox(BaseModel):
     """
     Modal sandbox model for tracking cloud VM coding sessions.
-    Replaces the old CoderSession (local Grok CLI).
+    Replaces the old CoderSession (local Codex CLI).
     """
     id: UUID
     created_at: datetime

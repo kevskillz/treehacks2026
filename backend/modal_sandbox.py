@@ -3,8 +3,8 @@ Modal sandbox management for isolated cloud VM code execution.
 Replaces the old local filesystem SandboxManager.
 
 Uses Modal's Sandbox API to provision cloud VMs with:
-- git, gh CLI, grok CLI pre-installed
-- XAI_API_KEY, ANTHROPIC_API_KEY, and GITHUB_TOKEN injected as secrets
+- git, gh CLI, codex CLI pre-installed
+- OPENAI_API_KEY, ANTHROPIC_API_KEY, and GITHUB_TOKEN injected as secrets
 - Full repo clone + branch creation
 """
 
@@ -40,11 +40,11 @@ sandbox_image = (
         "| tee /etc/apt/sources.list.d/github-cli.list > /dev/null",
         "apt-get update && apt-get install -y gh",
     )
-    # Install Grok Code CLI
+    # Install Codex CLI
     .run_commands(
         "curl -fsSL https://deb.nodesource.com/setup_20.x | bash -",
         "apt-get install -y nodejs",
-        "npm install -g @xai-official/grok",
+        "npm install -g @openai/codex",
     )
 )
 
@@ -130,7 +130,7 @@ class ModalSandboxManager:
             # Build secrets from environment or repo_config
             github_token = repo_config.github_token or os.getenv("GITHUB_TOKEN", "")
             anthropic_key = os.getenv("ANTHROPIC_API_KEY", "")
-            xai_api_key = os.getenv("XAI_API_KEY", "")
+            openai_api_key = os.getenv("OPENAI_API_KEY", "")
 
             # Create the sandbox with pre-built image
             # App.lookup is required when running outside of a Modal container
@@ -143,7 +143,8 @@ class ModalSandboxManager:
                 secrets=[
                     modal.Secret.from_dict({
                         "ANTHROPIC_API_KEY": anthropic_key,
-                        "XAI_API_KEY": xai_api_key,
+                        "OPENAI_API_KEY": openai_api_key,
+                        "CODEX_API_KEY": openai_api_key,
                         "GITHUB_TOKEN": github_token,
                         "GH_TOKEN": github_token,  # gh CLI uses GH_TOKEN
                     })
@@ -358,8 +359,16 @@ def get_repo_structure(sandbox_ctx: SandboxContext) -> str:
             raise SandboxError(f"tree failed: {stderr or stdout}")
         return stdout
     except SandboxError as e:
-        logger.warning(f"tree command failed: {e}")
-        return exec_in_sandbox(sandbox_ctx, "find", ".", "-maxdepth", "3", "-type", "f")
+        logger.warning(f"tree command failed, using find fallback: {e}")
+        # Produce a sorted, tree-like listing excluding common noise dirs
+        return exec_in_sandbox(
+            sandbox_ctx,
+            "bash", "-c",
+            "find . -maxdepth 3 "
+            "\\( -name node_modules -o -name __pycache__ -o -name .git -o -name dist "
+            "-o -name build -o -name .next -o -name target -o -name venv \\) -prune "
+            "-o -print | sort",
+        )
 
 
 # =====================================================
