@@ -5,12 +5,15 @@ import { getAutomations, getMonitorings, getAutomationDetails } from "@/lib/data
 import { Button } from "@/components/ui/button";
 import Link from "next/link";
 import { ProjectDetail } from "@/components/project-detail";
+import { connection } from "next/server";
 
 type ProjectPageProps = {
   params: Promise<{ id: string }>;
 };
 
-async function ProjectContent({ id }: { id: string }) {
+async function ProjectContent({ params }: { params: Promise<{ id: string }> }) {
+  await connection();
+  const { id } = await params;
   const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
   const [monitorings, automations, details] = await Promise.all([
     getMonitorings(),
@@ -74,11 +77,9 @@ async function ProjectContent({ id }: { id: string }) {
 }
 
 export default async function ProjectPage({ params }: ProjectPageProps) {
-  const { id } = await params;
-
   return (
     <Suspense fallback={<div className="min-h-screen p-8 lg:p-16">Loading...</div>}>
-      <ProjectContent id={id} />
+      <ProjectContent params={params} />
     </Suspense>
   );
 }

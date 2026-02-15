@@ -11,10 +11,14 @@ interface CreateButtonProps {
   planId?: string;
   issueUrl?: string;
   issueNumber?: number;
+  projectStatus?: string;
 }
 
-export function CreateButton({ automationId, hasIssue, planId, issueUrl, issueNumber }: CreateButtonProps) {
+export function CreateButton({ automationId, hasIssue, planId, issueUrl, issueNumber, projectStatus }: CreateButtonProps) {
   const initialStage = (() => {
+    // Derive stage from database project status first
+    if (projectStatus === "completed" || projectStatus === "executing") return "pr" as const;
+    if (projectStatus === "provisioning" || projectStatus === "planning") return "plan" as const;
     if (planId) return "plan" as const;
     if (hasIssue) return "issue" as const;
     return "idle" as const;
