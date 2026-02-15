@@ -705,16 +705,18 @@ def generate_implementation_plan(
     project = data["project"]
     tweets = data["tweets"]
 
-    if not tweets:
-        raise ValueError(f"No tweets found for project {project_id}")
-
     repo = db.get_repo_config(supabase, project.repo_config_id)
     if not repo:
         raise ValueError(f"Repo config not found for project {project_id}")
 
     sandbox_ctx = None
     try:
-        tweet_texts = [t.tweet_text for t in tweets]
+        # Always include project title/description, plus tweets if available
+        feedback_text = f"**{project.title}**\n\n{project.description or ''}"
+        if tweets:
+            tweet_texts = [t.tweet_text for t in tweets]
+            tweets_section = "\n".join([f"- {t}" for t in tweet_texts])
+            feedback_text += f"\n\n## Related User Tweets\n{tweets_section}"
 
         if repo_context:
             logger.info("Using pre-computed repo context")
@@ -741,7 +743,7 @@ def generate_implementation_plan(
         )
 
         plan_content = claude_client.generate_plan(
-            tweet_texts,
+            feedback_text,
             repo.github_owner,
             repo.github_repo,
             repo.github_branch,
