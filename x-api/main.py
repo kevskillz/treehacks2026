@@ -2,12 +2,15 @@ import os
 import hmac
 import hashlib
 import base64
+import threading
+import time
 from flask import Flask, request, redirect, jsonify
 from xdk import Client
 from xdk.oauth2_auth import OAuth2PKCEAuth
 from supabase import create_client, Client as SupabaseClient
 from datetime import datetime, timezone
 import requests
+from requests_oauthlib import OAuth1
 import uuid
 
 from dotenv import load_dotenv
@@ -61,9 +64,17 @@ except Exception as e:
 CLIENT_ID = os.getenv("CLIENT_ID")
 CLIENT_SECRET = os.getenv("CLIENT_SECRET")
 
-# API Key Secret (Consumer Secret) - REQUIRED for Webhooks
+# API Key and Secret (Consumer Key/Secret) - REQUIRED for Webhooks & OAuth 1.0a
 # Find this in Developer Portal -> "Keys and tokens" -> "API Key and Secret"
+CONSUMER_KEY = os.getenv("CONSUMER_KEY")
 CONSUMER_SECRET = os.getenv("CONSUMER_SECRET")
+
+# Access Token & Secret (OAuth 1.0a user token) - REQUIRED for subscription
+# Find this in Developer Portal -> "Keys and tokens" -> "Access Token and Secret"
+ACCESS_TOKEN_SECRET = os.getenv("ACCESS_TOKEN_SECRET")
+
+# Webhook environment name (from Developer Portal -> Account Activity API)
+WEBHOOK_ENV = os.getenv("WEBHOOK_ENV", "dev")
 
 # Ensure this matches your X App settings exactly
 REDIRECT_URI = "http://127.0.0.1:8080/callback"
@@ -76,6 +87,11 @@ ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")
 
 # Global storage for auth instance (required for PKCE)
 auth_store = {}
+
+# Polling state
+polling_thread = None
+polling_active = False
+last_seen_id = None
 
 @app.route("/post-tweet")
 def post_tweet():
@@ -112,48 +128,63 @@ def callback():
     action = auth_store.get('action')
     
     if not auth:
-        return jsonify({"error": "No auth flow found. Visit /post-tweet or /send-dm first."}), 400
+        return jsonify({"error": "No auth flow found. Visit /start-auth, /post-tweet, or /send-dm first."}), 400
 
     try:
         # Exchange code for access token
         tokens = auth.fetch_token(authorization_response=request.url)
         # Store tokens globally so the webhook can use them later
         auth_store['tokens'] = tokens
-        
-        # PRINT TOKEN FOR DEMO USE
+
+        # DEBUG: Print full token response to diagnose 403 issues
         print("\n" + "="*50)
-        print("ACCESS TOKEN (Save this for later if needed):")
-        print(tokens['access_token'])
+        print("FULL TOKEN RESPONSE:")
+        for k, v in tokens.items():
+            if k == 'access_token':
+                print(f"  {k}: {v[:20]}...{v[-10:]}")
+            else:
+                print(f"  {k}: {v}")
         print("="*50 + "\n")
-        
-        client = Client(access_token=tokens["access_token"])
-        
+
+        access_token = tokens["access_token"]
+
         if action == 'tweet':
-            response = client.posts.create(body={
-                "text": (
-                    "Been working on aggregating stuff for y'all at https://free-stuff-eta.vercel.app/ - so many free resources for builders!"
-                )
-            })
-            return jsonify({
-                "status": "Tweet posted successfully",
-                "data": str(response.data)
-            })
+            tweet_text = "Been working on aggregating stuff for y'all at https://free-stuff-eta.vercel.app/ - so many free resources for builders!"
+
+            # Use requests directly with user-context OAuth2 token
+            resp = requests.post(
+                "https://api.x.com/2/tweets",
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Content-Type": "application/json",
+                },
+                json={"text": tweet_text},
+            )
+            print(f"Tweet API response: {resp.status_code} {resp.text}")
+
+            if resp.status_code in (200, 201):
+                return jsonify({
+                    "status": "Tweet posted successfully",
+                    "data": resp.json()
+                })
+            else:
+                return jsonify({
+                    "error": f"Tweet API returned {resp.status_code}",
+                    "details": resp.json()
+                }), resp.status_code
             
         elif action == 'dm':
-            # Helper variables for DM
             participant_id = "1944199676497981440"
-            text_message = (
-                "Appreciate the ping about dark mode on FreeSauce! Working on implementing it soon."
-            )
-            
-            payload = {"text": text_message}
-            response = client.direct_messages.create_by_participant_id(participant_id, body=payload)
-            
+            text_message = "Appreciate the ping about dark mode on FreeSauce! Working on implementing it soon."
+
+            dm_client = Client(access_token=access_token)
+            response = dm_client.direct_messages.create_by_participant_id(participant_id, body={"text": text_message})
+
             return jsonify({
                 "status": "DM sent successfully",
                 "data": response.data
             })
-            
+
         return jsonify({"error": f"Unknown action: {action}"}), 400
 
     except Exception as e:
@@ -231,7 +262,7 @@ def webhook_request():
                         try:
                             # 1. CREATE PROJECT FIRST
                             print("   Attempting to create a Project for this tweet...")
-                            REPO_CONFIG_ID = "78570120-27fe-4247-8ec6-ac05fd447cbf" 
+                            REPO_CONFIG_ID = "aaaaaaaa-0000-0000-0000-000000000001" 
                             new_project_id = str(uuid.uuid4())
                             
                             # Generate Dynamic Title & Description
@@ -348,6 +379,225 @@ def webhook_request():
 
     # Got an invalid method
     return 'Method Not Allowed', 405
+
+def process_mention(tweet, author):
+    """Process a single mention from the v2 API: create project, store tweet, send DM."""
+    text = tweet.get('text', '')
+    tweet_id = tweet.get('id')
+    author_id = tweet.get('author_id')
+    author_username = author.get('username', 'unknown')
+    like_count = tweet.get('public_metrics', {}).get('like_count', 0)
+
+    print(f"\n👉 Processing mention from @{author_username}: {text}")
+
+    if not supabase:
+        print("   ❌ Supabase not initialized. Skipping.")
+        return
+
+    try:
+        # 1. CREATE PROJECT
+        REPO_CONFIG_ID = "aaaaaaaa-0000-0000-0000-000000000001"
+        new_project_id = str(uuid.uuid4())
+
+        print("   🤖 Generating project details with Grok...")
+        proj_title = generate_grok_response(
+            "You are a project manager. Generate a concise 3-5 word title for a software project based on this feature request.",
+            text
+        ) or text[:30]
+
+        proj_desc = generate_grok_response(
+            "You are a technical product owner. Summarize this tweet into a professional 1-sentence feature description.",
+            text
+        ) or text
+
+        print(f"   Generated Title: {proj_title}")
+
+        project_data = {
+            "id": new_project_id,
+            "title": proj_title,
+            "description": proj_desc,
+            "repo_config_id": REPO_CONFIG_ID,
+            "ticket_type": "feature",
+            "status": "pending",
+            "tweet_count": 1,
+            "severity_score": 5
+        }
+
+        proj_response = supabase.table("projects").insert(project_data).execute()
+
+        if not proj_response.data:
+            print("   ❌ Failed to create Project (no data returned).")
+            return
+
+        print(f"   ✅ Project created: {new_project_id}")
+
+        # 2. CREATE TWEET (linked to project)
+        tweet_data = {
+            "tweet_id": tweet_id,
+            "tweet_text": text,
+            "tweet_author_id": author_id,
+            "tweet_author_username": author_username,
+            "tweet_created_at": tweet.get('created_at', datetime.now(timezone.utc).isoformat()),
+            "project_id": new_project_id,
+            "likes_count": like_count,
+            "retweets_count": 0,
+            "replies_count": 0,
+            "processed": False
+        }
+
+        existing_tweet = supabase.table("tweets").select("id").eq("tweet_id", tweet_id).execute()
+        if existing_tweet.data and len(existing_tweet.data) > 0:
+            print(f"   ⚠️ Tweet {tweet_id} already exists. Skipping.")
+            return
+
+        response = supabase.table("tweets").insert(tweet_data).execute()
+        if not response.data:
+            print("   ⚠️ No data returned from Supabase tweet insert.")
+            return
+
+        print("   ✅ Tweet uploaded to Supabase.")
+
+        # 3. SEND DM to the mention author (using OAuth 1.0a)
+        try:
+            print(f"   Attempting to DM @{author_username}...")
+            dm_text = generate_grok_response(
+                "You are a helpful app developer. Write a friendly, 1-sentence DM to a user thanking them for their idea and mentioning you're starting work on it. Do not include hashtags.",
+                f"User Idea: {text}"
+            )
+            if not dm_text:
+                dm_text = "Just saw the idea you left on the app - working on implementing this right now; thanks for the feedback!"
+
+            dm_oauth = OAuth1(
+                CONSUMER_KEY,
+                client_secret=CONSUMER_SECRET,
+                resource_owner_key=ACCESS_TOKEN,
+                resource_owner_secret=ACCESS_TOKEN_SECRET,
+            )
+            dm_resp = requests.post(
+                f"https://api.x.com/2/dm_conversations/with/{author_id}/messages",
+                auth=dm_oauth,
+                json={"text": dm_text},
+            )
+            if dm_resp.status_code in (200, 201):
+                print(f"   ✅ DM Sent to @{author_username}!")
+            else:
+                print(f"   ❌ DM failed: {dm_resp.status_code} {dm_resp.text}")
+        except Exception as dm_error:
+            print(f"   ❌ Failed to send DM: {dm_error}")
+
+    except Exception as e:
+        print(f"   ❌ Error processing mention: {e}")
+
+
+def poll_mentions():
+    """Background loop that polls GET /2/users/:id/mentions every 30 seconds."""
+    global polling_active, last_seen_id
+
+    oauth = OAuth1(
+        CONSUMER_KEY,
+        client_secret=CONSUMER_SECRET,
+        resource_owner_key=ACCESS_TOKEN,
+        resource_owner_secret=ACCESS_TOKEN_SECRET,
+    )
+
+    # Get authenticated user's ID
+    me_resp = requests.get("https://api.x.com/2/users/me", auth=oauth)
+    if me_resp.status_code != 200:
+        print(f"❌ Failed to get user ID: {me_resp.status_code} {me_resp.text}")
+        polling_active = False
+        return
+
+    my_id = me_resp.json()['data']['id']
+    my_username = me_resp.json()['data'].get('username', '???')
+    print(f"✅ Polling mentions for @{my_username} (ID: {my_id})")
+
+    first_poll = last_seen_id is None
+
+    while polling_active:
+        try:
+            params = {
+                "query": f"@{my_username}",
+                "tweet.fields": "public_metrics,created_at",
+                "expansions": "author_id",
+                "user.fields": "username",
+                "max_results": 10,
+            }
+            if last_seen_id:
+                params["since_id"] = last_seen_id
+
+            resp = requests.get(
+                "https://api.x.com/2/tweets/search/recent",
+                auth=oauth,
+                params=params,
+            )
+
+            print(f"   [DEBUG] Search status={resp.status_code} body={resp.text[:500]}")
+
+            if resp.status_code == 429:
+                reset = resp.headers.get("x-rate-limit-reset")
+                wait = int(reset) - int(time.time()) + 1 if reset else 60
+                print(f"⏳ Rate limited. Waiting {wait}s...")
+                time.sleep(max(wait, 1))
+                continue
+
+            if resp.status_code != 200:
+                print(f"⚠️ Mentions API error: {resp.status_code} {resp.text}")
+                time.sleep(5)
+                continue
+
+            data = resp.json()
+            tweets = data.get('data', [])
+            includes = data.get('includes', {})
+            users_map = {u['id']: u for u in includes.get('users', [])}
+
+            if tweets:
+                # Update last_seen_id to the newest tweet (first in list)
+                last_seen_id = tweets[0]['id']
+
+                if first_poll:
+                    print(f"📌 First poll: recorded last_seen_id={last_seen_id}, skipping {len(tweets)} old mention(s).")
+                    first_poll = False
+                else:
+                    print(f"🔔 Found {len(tweets)} new mention(s)!")
+                    for tw in tweets:
+                        author = users_map.get(tw['author_id'], {"username": "unknown"})
+                        process_mention(tw, author)
+            else:
+                if first_poll:
+                    print("📌 First poll: no existing mentions found.")
+                    first_poll = False
+                else:
+                    print("   No new mentions.")
+
+        except Exception as e:
+            print(f"❌ Polling error: {e}")
+
+        time.sleep(5)
+
+    print("🛑 Polling stopped.")
+
+
+@app.route("/start-polling")
+def start_polling():
+    global polling_thread, polling_active
+    if polling_active:
+        return jsonify({"status": "Polling is already running."})
+
+    polling_active = True
+    polling_thread = threading.Thread(target=poll_mentions, daemon=True)
+    polling_thread.start()
+    return jsonify({"status": "Polling started. Checking mentions every 30 seconds."})
+
+
+@app.route("/stop-polling")
+def stop_polling():
+    global polling_active
+    if not polling_active:
+        return jsonify({"status": "Polling is not running."})
+
+    polling_active = False
+    return jsonify({"status": "Polling stopped."})
+
 
 if __name__ == "__main__":
     app.run(port=8080, debug=True)
