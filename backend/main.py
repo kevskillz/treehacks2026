@@ -3,6 +3,10 @@ FastAPI app for TreeHacks 2026 backend.
 Handles webhooks, plan generation, and coding workflow orchestration.
 """
 
+from contextlib import asynccontextmanager
+import threading
+import time
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
@@ -33,8 +37,23 @@ import db
 from llm import claude_client
 from coder import CoderOrchestrator
 
+# =====================================================
+# LIFESPAN (background poller)
+# =====================================================
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    stop_event = threading.Event()
+    poller = threading.Thread(target=_poll_status_changes, args=(stop_event,), daemon=True)
+    poller.start()
+    logger.info("Background status poller started")
+    yield
+    stop_event.set()
+    poller.join(timeout=10)
+
+
 # Initialize FastAPI
-app = FastAPI(title="TreeHacks 2026 API", version="2.0.0")
+app = FastAPI(title="TreeHacks 2026 API", version="2.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -785,6 +804,78 @@ def generate_implementation_plan(
             else:
                 from modal_sandbox import cleanup_sandbox as cleanup_sb
             cleanup_sb(sandbox_ctx)
+
+
+# =====================================================
+# BACKGROUND STATUS POLLER
+# =====================================================
+
+_processing: set[str] = set()
+
+
+def _poll_status_changes(stop_event: threading.Event):
+    """Poll Supabase for projects whose status changed externally."""
+    POLL_INTERVAL = 10  # seconds
+
+    while not stop_event.is_set():
+        try:
+            # --- planning → generate plan → provisioning ---
+            rows = (
+                supabase.table("projects")
+                .select("id, repo_config_id")
+                .eq("status", "planning")
+                .execute()
+                .data
+            )
+            for row in rows:
+                pid = row["id"]
+                if pid in _processing:
+                    continue
+                _processing.add(pid)
+                logger.info(f"[poller] Detected project {pid} in 'planning' — generating plan")
+                try:
+                    generate_implementation_plan(pid)
+                    logger.info(f"[poller] Plan generated for {pid}, status → provisioning")
+                except Exception as e:
+                    logger.error(f"[poller] Plan generation failed for {pid}: {e}", exc_info=True)
+                    try:
+                        db.update_project_status(supabase, pid, ProjectStatus.FAILED)
+                    except Exception:
+                        pass
+                finally:
+                    _processing.discard(pid)
+
+            # --- executing → coder workflow → completed/failed ---
+            rows = (
+                supabase.table("projects")
+                .select("id, repo_config_id")
+                .eq("status", "executing")
+                .execute()
+                .data
+            )
+            for row in rows:
+                pid = row["id"]
+                rcid = row["repo_config_id"]
+                if pid in _processing:
+                    continue
+                _processing.add(pid)
+                logger.info(f"[poller] Detected project {pid} in 'executing' — starting coder workflow")
+                try:
+                    coder_orchestrator.execute_issue_workflow(pid, rcid)
+                    logger.info(f"[poller] Coder workflow completed for {pid}")
+                except Exception as e:
+                    logger.error(f"[poller] Coder workflow failed for {pid}: {e}", exc_info=True)
+                    try:
+                        db.update_project_status(supabase, pid, ProjectStatus.FAILED)
+                    except Exception:
+                        pass
+                finally:
+                    _processing.discard(pid)
+
+        except Exception as e:
+            logger.error(f"[poller] Unexpected error in polling loop: {e}", exc_info=True)
+
+        stop_event.wait(POLL_INTERVAL)
 
 
 # =====================================================
