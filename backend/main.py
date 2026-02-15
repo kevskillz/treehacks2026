@@ -219,7 +219,7 @@ def approve_plan_endpoint(plan_id: UUID, body: dict | None = None):
 
     1. Approves the plan
     2. Sets project status to EXECUTING
-    3. Triggers the Claude Code workflow to implement the changes
+    3. Triggers the Grok Code workflow to implement the changes
     """
     try:
         user_id = body.get("user_id") if body else None

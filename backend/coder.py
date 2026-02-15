@@ -1,9 +1,9 @@
 """
-Core orchestrator for Claude Code CLI integration via Modal sandboxes.
+Core orchestrator for Grok Code CLI integration via Modal/local sandboxes.
 Manages coding sessions and workflow coordination.
 
-Replaces the old GrokCoderOrchestrator that used local subprocess calls.
-Now all coding happens inside Modal VMs with Claude Code CLI.
+Uses the Grok CLI (@xai-official/grok) for agentic code generation.
+All coding happens inside Modal VMs or local sandboxes.
 """
 
 import json
@@ -60,8 +60,8 @@ class GitHubError(WorkflowError):
     pass
 
 
-class ClaudeSessionError(WorkflowError):
-    """Claude Code session error."""
+class GrokSessionError(WorkflowError):
+    """Grok Code session error."""
     pass
 
 
@@ -84,16 +84,16 @@ class IssueData:
 
 
 # =====================================================
-# CLAUDE CODE SESSION (runs inside Modal sandbox)
+# GROK CODE SESSION (runs inside Modal/local sandbox)
 # =====================================================
 
 
-class ClaudeCodeSession:
+class GrokCoderSession:
     """
-    Manages Claude Code CLI running inside a Modal sandbox.
+    Manages Grok Code CLI running inside a Modal or local sandbox.
 
-    Replaces GrokCoderSession. Instead of local subprocess.Popen,
-    we run `claude` commands via sandbox.exec().
+    Uses the `grok` CLI (@xai-official/grok) in headless single-turn
+    mode with streaming-json output for real-time visibility.
     """
 
     def __init__(self, sandbox_ctx: SandboxContext):
@@ -101,17 +101,17 @@ class ClaudeCodeSession:
 
     def run_prompt(self, prompt: str, timeout: int = 600) -> str:
         """
-        Run a single prompt using Claude Code CLI in headless mode.
-        Uses stream-json output for real-time logging of Claude's actions.
+        Run a single prompt using Grok Code CLI in headless mode.
+        Uses streaming-json output for real-time logging.
 
         Args:
             prompt: Prompt text
             timeout: Timeout in seconds
 
         Returns:
-            Output text from Claude Code (last result text)
+            Output text from Grok
         """
-        logger.info(f"Running Claude Code prompt ({len(prompt)} chars)")
+        logger.info(f"Running Grok Code prompt ({len(prompt)} chars)")
 
         escaped_prompt = prompt.replace("'", "'\\''")
 
@@ -123,52 +123,62 @@ class ClaudeCodeSession:
 
         cmd = (
             f"cd {self.sandbox_ctx.repo_dir} && "
-            f"{stdbuf_prefix}claude -p '{escaped_prompt}' "
-            f"--model claude-sonnet-4-20250514 "
-            f"--dangerously-skip-permissions "
-            f"--output-format stream-json "
-            f"--verbose "
-            f"--max-turns 25"
+            f"{stdbuf_prefix}grok "
+            f"--single '{escaped_prompt}' "
+            f"--cwd {self.sandbox_ctx.repo_dir} "
+            f"--model grok-code-fast-1 "
+            f"--output-format streaming-json "
+            f"--yolo"
         )
 
         process = self.sandbox_ctx.sandbox.exec(
             "bash", "-c", cmd,
         )
 
-        # Stream stdout line-by-line — each line is a JSON event from Claude Code
+        # Stream stdout line-by-line — each line is an NDJSON event from Grok CLI
         stdout_lines = []
-        result_text = ""
+        assistant_text = []
         for line in process.stdout:
             line = line.strip()
             if not line:
                 continue
             stdout_lines.append(line)
-            # Parse the JSON event for readable log output
+            # Parse the NDJSON event for readable log output
             try:
                 event = json.loads(line)
-                etype = event.get("type", "")
-                if etype == "assistant" and "message" in event:
-                    msg = event["message"]
-                    for block in msg.get("content", []):
-                        btype = block.get("type", "")
-                        if btype == "text":
-                            text = block["text"][:200]
-                            logger.info(f"[claude-code] 💬 {text}")
-                        elif btype == "tool_use":
-                            name = block.get("name", "?")
-                            inp = str(block.get("input", ""))[:150]
-                            logger.info(f"[claude-code] 🔧 {name}: {inp}")
-                elif etype == "result":
-                    cost = event.get("cost_usd", "?")
-                    duration = event.get("duration_ms", "?")
-                    result_text = event.get("result", "")
-                    logger.info(f"[claude-code] ✅ Done — cost: ${cost}, duration: {duration}ms")
-                elif etype == "system":
-                    logger.info(f"[claude-code] ⚙️  {event.get('subtype', '')} {str(event.get('data', ''))[:150]}")
+                event_type = event.get("type", "unknown")
+                data = event.get("data", "")
+
+                if event_type == "thought":
+                    logger.info(f"[grok-code] 💭 {data[:200]}")
+                elif event_type == "text":
+                    assistant_text.append(data)
+                    logger.info(f"[grok-code] 💬 {data[:200]}")
+                elif event_type == "tool_call":
+                    tool_name = event.get("name", data)
+                    tool_input = event.get("input", {})
+                    logger.info(f"[grok-code] 🔧 TOOL: {tool_name}")
+                    if "file" in str(tool_input).lower() or "path" in str(tool_input).lower():
+                        logger.info(f"[grok-code]    → {str(tool_input)[:150]}")
+                elif event_type == "tool_result":
+                    logger.info(f"[grok-code]    ✅ Done")
+                elif event_type in ("file_write", "write"):
+                    logger.info(f"[grok-code]    📝 Writing: {data}")
+                elif event_type in ("file_read", "read"):
+                    logger.info(f"[grok-code]    📖 Reading: {data}")
+                elif event_type in ("file_edit", "edit"):
+                    logger.info(f"[grok-code]    ✏️  Editing: {data}")
+                elif event_type in ("bash", "command"):
+                    logger.info(f"[grok-code]    💻 Running: {data[:100]}")
+                elif event_type == "error":
+                    logger.error(f"[grok-code] ❌ ERROR: {data}")
+                elif event_type in ("done", "complete"):
+                    logger.info(f"[grok-code] ✅ {data}")
                 else:
-                    logger.info(f"[claude-code] [{etype}] {line[:150]}")
+                    logger.info(f"[grok-code] [{event_type}] {data[:100] if data else str(event)[:100]}")
             except json.JSONDecodeError:
-                logger.info(f"[claude-code] {line[:200]}")
+                if line:
+                    logger.info(f"[grok-code] {line[:200]}")
 
         stderr = process.stderr.read()
         process.wait()
@@ -177,19 +187,19 @@ class ClaudeCodeSession:
 
         if returncode != 0:
             logger.warning(
-                f"Claude Code exited with code {returncode}: {stderr[:500]}"
+                f"Grok Code exited with code {returncode}: {stderr[:500]}"
             )
 
-        logger.info(f"Claude Code finished: {len(stdout)} chars output")
-        return result_text or stdout
+        logger.info(f"Grok Code finished: {len(stdout)} chars output")
+        return "\n".join(assistant_text) if assistant_text else stdout
 
 
-def run_claude_fix(sandbox_ctx: SandboxContext, fix_prompt: str) -> str:
+def run_grok_fix(sandbox_ctx: SandboxContext, fix_prompt: str) -> str:
     """
-    Run a fix prompt through Claude Code in the sandbox.
+    Run a fix prompt through Grok Code in the sandbox.
     Used as the callback for verify_and_iterate.
     """
-    session = ClaudeCodeSession(sandbox_ctx)
+    session = GrokCoderSession(sandbox_ctx)
     return session.run_prompt(fix_prompt)
 
 
@@ -203,11 +213,11 @@ class CoderOrchestrator:
     Main workflow coordination for the coding system.
 
     Flow:
-    1. Create Modal sandbox (cloud VM)
+    1. Create Modal/local sandbox
     2. Clone repo + create branch
     3. Detect repo context
-    4. Generate test cases with Claude
-    5. Run Claude Code CLI for implementation
+    4. Generate test cases
+    5. Run Grok Code CLI for implementation
     6. Verify (test, build, lint, review) and iterate
     7. Commit, push, create PR
     8. Update Supabase with results
@@ -287,11 +297,11 @@ class CoderOrchestrator:
 
             test_cases = generate_test_cases(issue_data, repo_context)
 
-            # Step 7: Start Claude Code session
-            self._log_step(project_id, "start_claude_session", "Starting Claude Code CLI in sandbox")
+            # Step 7: Start Grok Code session
+            self._log_step(project_id, "start_grok_session", "Starting Grok Code CLI in sandbox")
             db.update_project_status(self.supabase, project_id, ProjectStatus.EXECUTING)
 
-            claude_session = ClaudeCodeSession(sandbox_ctx)
+            grok_session = GrokCoderSession(sandbox_ctx)
 
             # Store sandbox in database
             db_sandbox = db.create_modal_sandbox(self.supabase, {
@@ -304,11 +314,11 @@ class CoderOrchestrator:
             })
 
             # Step 8: Send implementation prompt
-            self._log_step(project_id, "implement_feature", "Implementing feature with Claude Code")
+            self._log_step(project_id, "implement_feature", "Implementing feature with Grok Code")
             implementation_prompt = self._build_implementation_prompt(
                 issue_data, plan, test_cases
             )
-            output = claude_session.run_prompt(implementation_prompt)
+            output = grok_session.run_prompt(implementation_prompt)
             logger.info(f"Implementation output: {len(output)} chars")
 
             # Step 9: Verification and iteration cycle
@@ -317,7 +327,7 @@ class CoderOrchestrator:
             success, verification_results = verify_and_iterate(
                 sandbox_ctx,
                 repo_config,
-                run_claude_fix,
+                run_grok_fix,
                 max_iterations=1,
                 skip_review=True,
             )
@@ -343,7 +353,7 @@ class CoderOrchestrator:
             commit_message = (
                 f"Fix: {issue_data.title}\n\n"
                 f"Fixes #{issue_data.number}\n\n"
-                f"Generated by @coder (Claude Code)"
+                f"Generated by @coder (Grok Code)"
             )
             commit_changes(sandbox_ctx, commit_message)
 
@@ -424,7 +434,7 @@ class CoderOrchestrator:
 
         finally:
             if sandbox_ctx:
-                self._log_step(project_id, "cleanup", "Cleaning up Modal sandbox")
+                self._log_step(project_id, "cleanup", "Cleaning up sandbox")
                 cleanup_sandbox(sandbox_ctx)
 
     def _log_step(
@@ -443,7 +453,7 @@ class CoderOrchestrator:
     def _build_implementation_prompt(
         self, issue: IssueData, plan, test_cases: str
     ) -> str:
-        """Build comprehensive prompt for Claude Code."""
+        """Build comprehensive prompt for Grok Code."""
         return f"""I need you to implement a fix for the following GitHub issue:
 
 # Issue Details

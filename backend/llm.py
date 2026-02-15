@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import List, Optional, Dict, Any
 
 from anthropic import Anthropic
+from xai_sdk import Client as XAIClient
+from xai_sdk.chat import system, user
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
@@ -22,6 +24,9 @@ logger = logging.getLogger(__name__)
 
 # Default model for reasoning tasks
 DEFAULT_MODEL = "claude-sonnet-4-20250514"
+
+# Grok model for planning
+GROK_PLANNING_MODEL = "grok-4-1-fast-reasoning"
 
 
 # Pydantic Models for structured outputs
@@ -58,6 +63,7 @@ class ClaudeClient:
         """Initialize Claude client with API key."""
         self.api_key = api_key or os.getenv("ANTHROPIC_API_KEY")
         self.client = Anthropic(api_key=self.api_key)
+        self.grok_client = XAIClient(api_key=os.getenv("XAI_API_KEY"))
 
     def _chat(
         self,
@@ -74,6 +80,20 @@ class ClaudeClient:
             messages=[{"role": "user", "content": user_prompt}],
         )
         return response.content[0].text
+
+    def _grok_chat(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        model: str = GROK_PLANNING_MODEL,
+        max_tokens: int = 4096,
+    ) -> str:
+        """Send a chat message via xAI SDK."""
+        chat = self.grok_client.chat.create(model=model)
+        chat.append(system(system_prompt))
+        chat.append(user(user_prompt))
+        response = chat.sample()
+        return response.content
 
     # ------------------------------------------------------------------
     # Embeddings — Claude doesn't have a native embeddings endpoint.
@@ -147,7 +167,7 @@ class ClaudeClient:
                 "Format the plan as clean markdown with NO code blocks."
             )
 
-            plan_content = self._chat(system_msg, user_msg)
+            plan_content = self._grok_chat(system_msg, user_msg)
             verified_plan = self.verify_plan_formatting(plan_content)
             return verified_plan
 
@@ -171,7 +191,7 @@ class ClaudeClient:
                 "Return ONLY the cleaned plan content as markdown."
             )
 
-            return self._chat(
+            return self._grok_chat(
                 "You are a technical editor ensuring implementation plans contain "
                 "no code snippets. Return only the cleaned markdown plan.",
                 prompt,

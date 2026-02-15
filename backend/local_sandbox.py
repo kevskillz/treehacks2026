@@ -11,6 +11,7 @@ import shlex
 import shutil
 import logging
 import subprocess
+import uuid as _uuid
 from uuid import UUID
 
 from models import RepoConfig
@@ -137,7 +138,7 @@ def create_sandbox(
     Returns:
         SandboxContext with a LocalSandbox handle
     """
-    branch_name = f"fix/issue-{str(project_id)[:8]}"
+    branch_name = f"fix/issue-{str(project_id)[:8]}-{_uuid.uuid4().hex[:4]}"
     github_token = repo_config.github_token or os.getenv("GITHUB_TOKEN", "")
     anthropic_key = os.getenv("ANTHROPIC_API_KEY", "")
 
@@ -165,8 +166,11 @@ def create_sandbox(
         shutil.rmtree(base_dir)
     os.makedirs(base_dir, exist_ok=True)
 
+    xai_api_key = os.getenv("XAI_API_KEY", "")
+
     env = {
         "ANTHROPIC_API_KEY": anthropic_key,
+        "XAI_API_KEY": xai_api_key,
         "GITHUB_TOKEN": github_token,
         "GH_TOKEN": github_token,
     }

@@ -565,7 +565,7 @@ Start your response with "SCORE: <number>" on the first line.
 def verify_and_iterate(
     sandbox_ctx: SandboxContext,
     repo_config: Any,
-    run_claude_fix_fn: Any,  # Callable to send fix prompt to Claude Code in sandbox
+    run_fix_fn: Any,  # Callable to send fix prompt to coding agent in sandbox
     max_iterations: int = 3,
     skip_review: bool = False,
 ) -> tuple[bool, Optional[Dict[str, Any]]]:
@@ -575,7 +575,7 @@ def verify_and_iterate(
     Args:
         sandbox_ctx: Modal SandboxContext
         repo_config: RepoConfig
-        run_claude_fix_fn: Function(sandbox_ctx, fix_prompt) -> str
+        run_fix_fn: Function(sandbox_ctx, fix_prompt) -> str
         max_iterations: Maximum fix iterations
         skip_review: If True, skip the LLM self-review step (faster)
 
@@ -631,8 +631,8 @@ def verify_and_iterate(
             test_result, build_result, lint_result, type_result,
             review_result or ReviewResult(score=100, feedback=""),
         )
-        logger.info("Verification failed, sending fix prompt to Claude Code")
-        run_claude_fix_fn(sandbox_ctx, fix_prompt)
+        logger.info("Verification failed, sending fix prompt to coding agent")
+        run_fix_fn(sandbox_ctx, fix_prompt)
 
     # Max iterations reached — still return partial results so we can commit
     logger.warning("Max iterations reached, returning best-effort results")
